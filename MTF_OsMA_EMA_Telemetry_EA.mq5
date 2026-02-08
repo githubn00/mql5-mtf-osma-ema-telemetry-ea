@@ -576,19 +576,34 @@ string BuildSid()
 bool EntryAllowed(int direction)
   {
    if(g_tfs[0].state.osma_just_cross_up || g_tfs[0].state.osma_just_cross_down)
+     {
+      PrintFormat("[ENTRY-BLOCK][BASE] dir=%s reason=M1 OsMA just crossed", direction > 0 ? "BUY" : "SELL");
       return false;
+     }
 
    bool m1_peak_block = g_tfs[0].state.peak_bottom_reached_1334 && !(g_tfs[0].state.phase == PHASE_FLAT_ABOUT_TO_CROSS || g_tfs[0].state.phase == PHASE_RUNNING_CONTINUED);
    bool m5_peak_block = g_tfs[1].state.peak_bottom_reached_1334 && !(g_tfs[1].state.phase == PHASE_FLAT_ABOUT_TO_CROSS || g_tfs[1].state.phase == PHASE_RUNNING_CONTINUED);
 
    if(m1_peak_block || m5_peak_block)
+     {
+      PrintFormat("[ENTRY-BLOCK][BASE] dir=%s reason=peak/phase block m1=%s m5=%s",
+                  direction > 0 ? "BUY" : "SELL",
+                  m1_peak_block ? "true" : "false",
+                  m5_peak_block ? "true" : "false");
       return false;
+     }
 
    if(direction > 0 && g_tfs[0].state.direction == TREND_DOWN && g_tfs[1].state.direction == TREND_DOWN)
+     {
+      Print("[ENTRY-BLOCK][BASE] dir=BUY reason=M1+M5 direction both DOWN");
       return false;
+     }
 
    if(direction < 0 && g_tfs[0].state.direction == TREND_UP && g_tfs[1].state.direction == TREND_UP)
+     {
+      Print("[ENTRY-BLOCK][BASE] dir=SELL reason=M1+M5 direction both UP");
       return false;
+     }
 
    return true;
   }
@@ -654,13 +669,29 @@ void ManagePositions(bool strong_buy, bool strong_sell)
            {
             double new_sl = bid - trailing_dist;
             if(sl <= 0.0 || new_sl > sl)
-               g_trade.PositionModify(ticket, new_sl, tp);
+              {
+               bool modified = g_trade.PositionModify(ticket, new_sl, tp);
+               PrintFormat("[EXIT-RISK] ticket=%I64u type=BUY reason=trail-sl oldSL=%s newSL=%s atr=%s ok=%s",
+                           ticket,
+                           DoubleToString(sl, _Digits),
+                           DoubleToString(new_sl, _Digits),
+                           DoubleToString(g_tfs[1].state.bars.atr, _Digits),
+                           modified ? "true" : "false");
+              }
            }
          else if(type == POSITION_TYPE_SELL)
            {
             double new_sl = ask + trailing_dist;
             if(sl <= 0.0 || new_sl < sl)
-               g_trade.PositionModify(ticket, new_sl, tp);
+              {
+               bool modified = g_trade.PositionModify(ticket, new_sl, tp);
+               PrintFormat("[EXIT-RISK] ticket=%I64u type=SELL reason=trail-sl oldSL=%s newSL=%s atr=%s ok=%s",
+                           ticket,
+                           DoubleToString(sl, _Digits),
+                           DoubleToString(new_sl, _Digits),
+                           DoubleToString(g_tfs[1].state.bars.atr, _Digits),
+                           modified ? "true" : "false");
+              }
            }
         }
 
@@ -686,10 +717,14 @@ void ManagePositions(bool strong_buy, bool strong_sell)
               }
             string new_sid = BuildSid();
             AddReassessEvent((long)ticket, "Opposite strong signal but continuation active", prev_sid, new_sid);
+            PrintFormat("[EXIT-HOLD] ticket=%I64u reason=opposite-strong-but-continuation strongBuy=%s strongSell=%s profit=%.2f",
+                        ticket, strong_buy ? "true" : "false", strong_sell ? "true" : "false", profit);
            }
          else
            {
-            g_trade.PositionClose(ticket);
+            bool closed = g_trade.PositionClose(ticket);
+            PrintFormat("[EXIT-CLOSE] ticket=%I64u reason=opposite-strong strongBuy=%s strongSell=%s profit=%.2f ok=%s",
+                        ticket, strong_buy ? "true" : "false", strong_sell ? "true" : "false", profit, closed ? "true" : "false");
             continue;
            }
         }
@@ -707,13 +742,17 @@ void ManagePositions(bool strong_buy, bool strong_sell)
             if(points >= 8.0)
               {
                g_last_scalp_win = MathMax(g_last_scalp_win, profit);
-               g_trade.PositionClose(ticket);
+               bool closed = g_trade.PositionClose(ticket);
+               PrintFormat("[EXIT-CLOSE] ticket=%I64u reason=scalp-quick-gain points=%.1f profit=%.2f ok=%s",
+                           ticket, points, profit, closed ? "true" : "false");
                continue;
               }
            }
          else if(g_last_scalp_win > 0.0 && MathAbs(profit) > g_last_scalp_win)
            {
-            g_trade.PositionClose(ticket);
+            bool closed = g_trade.PositionClose(ticket);
+            PrintFormat("[EXIT-CLOSE] ticket=%I64u reason=scalp-loss-guard profit=%.2f lastScalpWin=%.2f ok=%s",
+                        ticket, profit, g_last_scalp_win, closed ? "true" : "false");
             continue;
            }
         }
@@ -724,27 +763,46 @@ bool PlaceEntry(int direction, string ent, string ext, string sig)
   {
    string sid = BuildSid();
    string comment = "SID:" + sid + "|ENT:" + ent + "|EXT:" + ext + "|SIG:" + sig;
+   string side = direction > 0 ? "BUY" : "SELL";
 
    if(InpDryRun)
      {
       g_last_recommendation = (direction > 0 ? "BUY " : "SELL ") + comment;
+      PrintFormat("[ENTRY-DRYRUN] side=%s mode=%s lot=%.2f comment=%s",
+                  side, StrategyModeToString(InpStrategyMode), InpFixedLot, comment);
       return true;
      }
 
    if(direction > 0)
-      return g_trade.Buy(InpFixedLot, _Symbol, 0.0, 0.0, 0.0, comment);
+     {
+      bool ok = g_trade.Buy(InpFixedLot, _Symbol, 0.0, 0.0, 0.0, comment);
+      PrintFormat("[ENTRY-SEND] side=%s mode=%s lot=%.2f ok=%s retcode=%u comment=%s",
+                  side, StrategyModeToString(InpStrategyMode), InpFixedLot, ok ? "true" : "false", g_trade.ResultRetcode(), comment);
+      return ok;
+     }
 
-   return g_trade.Sell(InpFixedLot, _Symbol, 0.0, 0.0, 0.0, comment);
+   bool ok = g_trade.Sell(InpFixedLot, _Symbol, 0.0, 0.0, 0.0, comment);
+   PrintFormat("[ENTRY-SEND] side=%s mode=%s lot=%.2f ok=%s retcode=%u comment=%s",
+               side, StrategyModeToString(InpStrategyMode), InpFixedLot, ok ? "true" : "false", g_trade.ResultRetcode(), comment);
+   return ok;
   }
 
 bool ShouldOpenBuyBase(int osma_buy, int ema_buy, bool strong_buy)
   {
-   return strong_buy && EntryAllowed(1);
+   bool allowed = EntryAllowed(1);
+   bool result = strong_buy && allowed;
+   PrintFormat("[ENTRY-EVAL][BASE] side=BUY strongBuy=%s osmaBuy=%d emaBuy=%d entryAllowed=%s result=%s",
+               strong_buy ? "true" : "false", osma_buy, ema_buy, allowed ? "true" : "false", result ? "true" : "false");
+   return result;
   }
 
 bool ShouldOpenSellBase(int osma_sell, int ema_sell, bool strong_sell)
   {
-   return strong_sell && EntryAllowed(-1);
+   bool allowed = EntryAllowed(-1);
+   bool result = strong_sell && allowed;
+   PrintFormat("[ENTRY-EVAL][BASE] side=SELL strongSell=%s osmaSell=%d emaSell=%d entryAllowed=%s result=%s",
+               strong_sell ? "true" : "false", osma_sell, ema_sell, allowed ? "true" : "false", result ? "true" : "false");
+   return result;
   }
 
 TrendDirection GetM1TrendOptionV1()
@@ -781,29 +839,44 @@ bool EntryAllowedOptionV1(int direction)
    if(InpOptionV1UseOsmaJustCrossBlock)
      {
       if(g_tfs[0].state.osma_just_cross_up || g_tfs[0].state.osma_just_cross_down)
+        {
+         PrintFormat("[ENTRY-BLOCK][OPTIONV1] dir=%s reason=M1 OsMA just crossed", direction > 0 ? "BUY" : "SELL");
          return false;
+        }
      }
 
    if(InpOptionV1UseM1PeakPhaseBlock)
      {
       bool m1_peak_block = g_tfs[0].state.peak_bottom_reached_1334 && !(g_tfs[0].state.phase == PHASE_FLAT_ABOUT_TO_CROSS || g_tfs[0].state.phase == PHASE_RUNNING_CONTINUED);
       if(m1_peak_block)
+        {
+         PrintFormat("[ENTRY-BLOCK][OPTIONV1] dir=%s reason=M1 peak/phase block", direction > 0 ? "BUY" : "SELL");
          return false;
+        }
      }
 
    if(InpOptionV1UseM5PeakPhaseBlock)
      {
       bool m5_peak_block = g_tfs[1].state.peak_bottom_reached_1334 && !(g_tfs[1].state.phase == PHASE_FLAT_ABOUT_TO_CROSS || g_tfs[1].state.phase == PHASE_RUNNING_CONTINUED);
       if(m5_peak_block)
+        {
+         PrintFormat("[ENTRY-BLOCK][OPTIONV1] dir=%s reason=M5 peak/phase block", direction > 0 ? "BUY" : "SELL");
          return false;
+        }
      }
 
    if(InpOptionV1UseM1M5DirectionBlock)
      {
       if(direction > 0 && g_tfs[0].state.direction == TREND_DOWN && g_tfs[1].state.direction == TREND_DOWN)
+        {
+         Print("[ENTRY-BLOCK][OPTIONV1] dir=BUY reason=M1+M5 direction both DOWN");
          return false;
+        }
       if(direction < 0 && g_tfs[0].state.direction == TREND_UP && g_tfs[1].state.direction == TREND_UP)
+        {
+         Print("[ENTRY-BLOCK][OPTIONV1] dir=SELL reason=M1+M5 direction both UP");
          return false;
+        }
      }
 
    return true;
@@ -811,12 +884,44 @@ bool EntryAllowedOptionV1(int direction)
 
 bool ShouldOpenBuyOptionV1(int osma_buy, int ema_buy, bool strong_buy)
   {
-   return IsM1TrendUpOptionV1() && IsM1AboutToCrossUpTickSideOptionV1() && EntryAllowedOptionV1(1);
+   bool trend_up = IsM1TrendUpOptionV1();
+   bool about_up = IsM1AboutToCrossUpTickSideOptionV1();
+   bool allowed = EntryAllowedOptionV1(1);
+   bool result = trend_up && about_up && allowed;
+   double diff = g_tfs[0].state.ema13_value - g_tfs[0].state.ema34_value;
+   PrintFormat("[ENTRY-EVAL][OPTIONV1] side=BUY trend(150>200)=%s ema150=%s ema200=%s aboutCrossUp=%s ema13=%s ema34=%s diff=%s nearPts=%.1f filters=%s result=%s",
+               trend_up ? "true" : "false",
+               DoubleToString(g_tfs[0].state.ema150_value, _Digits),
+               DoubleToString(g_tfs[0].state.ema200_value, _Digits),
+               about_up ? "true" : "false",
+               DoubleToString(g_tfs[0].state.ema13_value, _Digits),
+               DoubleToString(g_tfs[0].state.ema34_value, _Digits),
+               DoubleToString(diff, _Digits),
+               InpOptionV1NearCrossThresholdPoints,
+               allowed ? "true" : "false",
+               result ? "true" : "false");
+   return result;
   }
 
 bool ShouldOpenSellOptionV1(int osma_sell, int ema_sell, bool strong_sell)
   {
-   return IsM1TrendDownOptionV1() && IsM1AboutToCrossDownTickSideOptionV1() && EntryAllowedOptionV1(-1);
+   bool trend_down = IsM1TrendDownOptionV1();
+   bool about_down = IsM1AboutToCrossDownTickSideOptionV1();
+   bool allowed = EntryAllowedOptionV1(-1);
+   bool result = trend_down && about_down && allowed;
+   double diff = g_tfs[0].state.ema13_value - g_tfs[0].state.ema34_value;
+   PrintFormat("[ENTRY-EVAL][OPTIONV1] side=SELL trend(150<200)=%s ema150=%s ema200=%s aboutCrossDown=%s ema13=%s ema34=%s diff=%s nearPts=%.1f filters=%s result=%s",
+               trend_down ? "true" : "false",
+               DoubleToString(g_tfs[0].state.ema150_value, _Digits),
+               DoubleToString(g_tfs[0].state.ema200_value, _Digits),
+               about_down ? "true" : "false",
+               DoubleToString(g_tfs[0].state.ema13_value, _Digits),
+               DoubleToString(g_tfs[0].state.ema34_value, _Digits),
+               DoubleToString(diff, _Digits),
+               InpOptionV1NearCrossThresholdPoints,
+               allowed ? "true" : "false",
+               result ? "true" : "false");
+   return result;
   }
 
 bool ShouldOpenBuy(StrategyMode mode, int osma_buy, int ema_buy, bool strong_buy)
@@ -857,6 +962,11 @@ void EvaluateSignalsAndTrade()
 
    bool strong_buy = (strong_osma_buy || strong_ema_buy) && !(strong_osma_sell && strong_ema_sell);
    bool strong_sell = (strong_osma_sell || strong_ema_sell) && !(strong_osma_buy && strong_ema_buy);
+   PrintFormat("[SIGNAL] mode=%s osmaBuy=%d osmaSell=%d emaBuy=%d emaSell=%d strongBuy=%s strongSell=%s",
+               StrategyModeToString(InpStrategyMode),
+               osma_buy, osma_sell, ema_buy, ema_sell,
+               strong_buy ? "true" : "false",
+               strong_sell ? "true" : "false");
 
    ManagePositions(strong_buy, strong_sell);
 
