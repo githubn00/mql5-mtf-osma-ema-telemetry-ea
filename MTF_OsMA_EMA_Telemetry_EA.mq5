@@ -25,6 +25,12 @@ enum CrossPhase
    PHASE_RUNNING_CONTINUED = 3
   };
 
+enum StrategyMode
+  {
+   STRAT_BASE = 0,
+   STRAT_OPTION_V1 = 1
+  };
+
 enum MaId
   {
    MA_EMA150 = 0,
@@ -139,6 +145,7 @@ struct ReassessEvent
   };
 
 input bool InpDryRun = true;
+input StrategyMode InpStrategyMode = STRAT_BASE;
 input double InpFixedLot = 0.01;
 input int InpMinAlignedTF = 4;
 input int InpMagic = 13034;
@@ -204,6 +211,12 @@ string TrendToString(TrendDirection d)
    if(d == TREND_UP) return "Up";
    if(d == TREND_DOWN) return "Down";
    return "Flat";
+  }
+
+string StrategyModeToString(StrategyMode mode)
+  {
+   if(mode == STRAT_OPTION_V1) return "OptionV1";
+   return "Base";
   }
 
 int SignOf(double v)
@@ -714,6 +727,44 @@ bool PlaceEntry(int direction, string ent, string ext, string sig)
    return g_trade.Sell(InpFixedLot, _Symbol, 0.0, 0.0, 0.0, comment);
   }
 
+bool ShouldOpenBuyBase(int osma_buy, int ema_buy, bool strong_buy)
+  {
+   return strong_buy && EntryAllowed(1);
+  }
+
+bool ShouldOpenSellBase(int osma_sell, int ema_sell, bool strong_sell)
+  {
+   return strong_sell && EntryAllowed(-1);
+  }
+
+bool ShouldOpenBuyOptionV1(int osma_buy, int ema_buy, bool strong_buy)
+  {
+   // Placeholder: to be replaced with user-defined option strategy entry rules.
+   return false;
+  }
+
+bool ShouldOpenSellOptionV1(int osma_sell, int ema_sell, bool strong_sell)
+  {
+   // Placeholder: to be replaced with user-defined option strategy entry rules.
+   return false;
+  }
+
+bool ShouldOpenBuy(StrategyMode mode, int osma_buy, int ema_buy, bool strong_buy)
+  {
+   if(mode == STRAT_OPTION_V1)
+      return ShouldOpenBuyOptionV1(osma_buy, ema_buy, strong_buy);
+
+   return ShouldOpenBuyBase(osma_buy, ema_buy, strong_buy);
+  }
+
+bool ShouldOpenSell(StrategyMode mode, int osma_sell, int ema_sell, bool strong_sell)
+  {
+   if(mode == STRAT_OPTION_V1)
+      return ShouldOpenSellOptionV1(osma_sell, ema_sell, strong_sell);
+
+   return ShouldOpenSellBase(osma_sell, ema_sell, strong_sell);
+  }
+
 void EvaluateSignalsAndTrade()
   {
    int osma_buy = 0;
@@ -739,7 +790,10 @@ void EvaluateSignalsAndTrade()
 
    ManagePositions(strong_buy, strong_sell);
 
-   if(strong_buy && EntryAllowed(1))
+   bool should_open_buy = ShouldOpenBuy(InpStrategyMode, osma_buy, ema_buy, strong_buy);
+   bool should_open_sell = ShouldOpenSell(InpStrategyMode, osma_sell, ema_sell, strong_sell);
+
+   if(should_open_buy)
      {
       string ent = (MathMax(osma_buy, ema_buy) >= 5) ? "LONGTERM_BUY_ALIGN" : "SCALP_BUY_ALIGN";
       string ext = "EXIT_ON_OPPOSITE_STRONG_OR_PHASE_BREAK";
@@ -747,7 +801,7 @@ void EvaluateSignalsAndTrade()
       PlaceEntry(1, ent, ext, sig);
      }
 
-   if(strong_sell && EntryAllowed(-1))
+   if(should_open_sell)
      {
       string ent = (MathMax(osma_sell, ema_sell) >= 5) ? "LONGTERM_SELL_ALIGN" : "SCALP_SELL_ALIGN";
       string ext = "EXIT_ON_OPPOSITE_STRONG_OR_PHASE_BREAK";
@@ -823,6 +877,7 @@ void WriteJsonState()
    json += "\"symbol\":\"" + JsonEscape(_Symbol) + "\",";
    json += "\"magic\":" + IntegerToString(InpMagic) + ",";
    json += "\"dryRun\":" + BoolJson(InpDryRun) + ",";
+   json += "\"strategyMode\":\"" + StrategyModeToString(InpStrategyMode) + "\",";
    json += "\"updatedAt\":" + TimeToJson(TimeCurrent()) + ",";
    json += "\"recommendation\":\"" + JsonEscape(g_last_recommendation) + "\"";
    json += "},";
