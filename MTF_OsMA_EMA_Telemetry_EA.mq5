@@ -173,6 +173,19 @@ input bool InpOptionV1UseOsmaJustCrossBlock = true;
 input bool InpOptionV1UseM1PeakPhaseBlock = true;
 input bool InpOptionV1UseM5PeakPhaseBlock = true;
 input bool InpOptionV1UseM1M5DirectionBlock = true;
+input bool InpV2EnableRiskGuard = true;
+input double InpV2MaxEquityDrawdownPct = 20.0;
+input double InpV2MaxFloatingLossPct = 8.0;
+input double InpV2MaxDepositLoadPct = 12.0;
+input int InpV2MaxOpenPositions = 3;
+input int InpV2EntryCooldownBarsM1 = 3;
+input bool InpV2RequireTrendConsensusM1M5 = true;
+input bool InpV2RequireOsmaAgreementM1 = true;
+input double InpV2InitialSlAtrMult = 1.2;
+input int InpV2TimeStopBarsM1 = 30;
+input bool InpV2AutoCloseOnGuardBreach = true;
+input bool InpV2UseDynamicLotCap = true;
+input double InpV2MaxLotByEquity = 0.01;
 
 CTrade g_trade;
 TfRuntime g_tfs[TF_COUNT];
@@ -184,6 +197,27 @@ int g_d1_150200_count = 0;
 string g_last_recommendation = "NONE";
 int g_sid_counter = 0;
 double g_last_scalp_win = 0.0;
+double g_v2_equity_peak = 0.0;
+double g_v2_current_equity = 0.0;
+double g_v2_current_drawdown_pct = 0.0;
+double g_v2_current_floating_profit = 0.0;
+double g_v2_current_floating_loss_pct = 0.0;
+double g_v2_current_deposit_load_pct = 0.0;
+int g_v2_current_open_positions = 0;
+bool g_v2_guard_dd = false;
+bool g_v2_guard_float = false;
+bool g_v2_guard_load = false;
+bool g_v2_guard_poscount = false;
+bool g_v2_guard_breached = false;
+string g_v2_guard_reason = "NONE";
+string g_v2_entry_block_reason = "NONE";
+bool g_v2_last_risk_guard_pass = true;
+bool g_v2_last_cooldown_pass = true;
+bool g_v2_last_trend_consensus_pass = true;
+bool g_v2_last_osma_pass = true;
+datetime g_v2_last_entry_bar_time = 0;
+int g_v2_last_entry_direction = 0;
+int g_v2_last_entry_bars_total = -1;
 
 const ENUM_TIMEFRAMES TF_VALUES[TF_COUNT] = {PERIOD_M1, PERIOD_M5, PERIOD_M15, PERIOD_H1, PERIOD_H4, PERIOD_D1};
 const string TF_NAMES[TF_COUNT] = {"M1", "M5", "M15", "H1", "H4", "D1"};
@@ -261,6 +295,162 @@ bool LoadRates(ENUM_TIMEFRAMES tf, int count, MqlRates &rates[])
    if(copied != count)
       return false;
    ArraySetAsSeries(rates, true);
+   return true;
+  }
+
+double NormalizeVolume(double lot)
+  {
+   double min_lot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+   double max_lot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
+   double step = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+   if(step <= 0.0)
+      step = 0.01;
+
+   double v = MathMin(MathMax(lot, min_lot), max_lot);
+   double steps = MathFloor(v / step);
+   v = steps * step;
+   if(v < min_lot)
+      v = min_lot;
+   return v;
+  }
+
+double ComputeEntryLot()
+  {
+   double lot = InpFixedLot;
+   if(InpV2UseDynamicLotCap)
+      lot = MathMin(lot, InpV2MaxLotByEquity);
+   return NormalizeVolume(lot);
+  }
+
+double NormalizePriceByTick(double price)
+  {
+   double tick = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
+   if(tick <= 0.0)
+      tick = _Point;
+   return MathRound(price / tick) * tick;
+  }
+
+double ComputeInitialSlPrice(int direction, double ref_price)
+  {
+   double atr = g_tfs[0].state.bars.atr;
+   double dist = atr * InpV2InitialSlAtrMult;
+   if(dist <= 0.0)
+      dist = 80.0 * _Point;
+
+   double stop_level = (double)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL) * _Point;
+   if(stop_level > 0.0 && dist < stop_level)
+      dist = stop_level;
+
+   if(direction > 0)
+      return NormalizePriceByTick(ref_price - dist);
+   return NormalizePriceByTick(ref_price + dist);
+  }
+
+bool CountManagedPositions(int &count, double &floating_profit)
+  {
+   count = 0;
+   floating_profit = 0.0;
+   for(int i = 0; i < PositionsTotal(); i++)
+     {
+      ulong ticket = PositionGetTicket(i);
+      if(!PositionSelectByTicket(ticket))
+         continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol)
+         continue;
+      if((int)PositionGetInteger(POSITION_MAGIC) != InpMagic)
+         continue;
+      count++;
+      floating_profit += PositionGetDouble(POSITION_PROFIT);
+     }
+   return true;
+  }
+
+bool RefreshV2RiskState()
+  {
+   g_v2_current_equity = AccountInfoDouble(ACCOUNT_EQUITY);
+   if(g_v2_current_equity <= 0.0)
+      g_v2_current_equity = 0.0000001;
+
+   if(g_v2_equity_peak < g_v2_current_equity)
+      g_v2_equity_peak = g_v2_current_equity;
+   if(g_v2_equity_peak <= 0.0)
+      g_v2_equity_peak = g_v2_current_equity;
+
+   int open_count = 0;
+   double floating_profit = 0.0;
+   CountManagedPositions(open_count, floating_profit);
+
+   g_v2_current_open_positions = open_count;
+   g_v2_current_floating_profit = floating_profit;
+   g_v2_current_drawdown_pct = ((g_v2_equity_peak - g_v2_current_equity) / g_v2_equity_peak) * 100.0;
+   g_v2_current_floating_loss_pct = (floating_profit < 0.0) ? (MathAbs(floating_profit) / g_v2_current_equity) * 100.0 : 0.0;
+   g_v2_current_deposit_load_pct = (AccountInfoDouble(ACCOUNT_MARGIN) / g_v2_current_equity) * 100.0;
+
+   g_v2_guard_dd = (g_v2_current_drawdown_pct > InpV2MaxEquityDrawdownPct);
+   g_v2_guard_float = (g_v2_current_floating_loss_pct > InpV2MaxFloatingLossPct);
+   g_v2_guard_load = (g_v2_current_deposit_load_pct > InpV2MaxDepositLoadPct);
+   g_v2_guard_poscount = (g_v2_current_open_positions >= InpV2MaxOpenPositions);
+   g_v2_guard_breached = g_v2_guard_dd || g_v2_guard_float || g_v2_guard_load || g_v2_guard_poscount;
+   g_v2_guard_reason = "NONE";
+   if(g_v2_guard_dd) g_v2_guard_reason = "RISK_GUARD_DD";
+   else if(g_v2_guard_float) g_v2_guard_reason = "RISK_GUARD_FLOAT";
+   else if(g_v2_guard_load) g_v2_guard_reason = "RISK_GUARD_LOAD";
+   else if(g_v2_guard_poscount) g_v2_guard_reason = "RISK_GUARD_POSCOUNT";
+
+   return true;
+  }
+
+bool RiskGuardsAllowEntry()
+  {
+   if(!InpV2EnableRiskGuard)
+     {
+      g_v2_last_risk_guard_pass = true;
+      return true;
+     }
+
+   RefreshV2RiskState();
+   g_v2_last_risk_guard_pass = !g_v2_guard_breached;
+   if(!g_v2_last_risk_guard_pass)
+      g_v2_entry_block_reason = g_v2_guard_reason;
+   return g_v2_last_risk_guard_pass;
+  }
+
+void EmergencyCloseAllManaged(string reason)
+  {
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+     {
+      ulong ticket = PositionGetTicket(i);
+      if(!PositionSelectByTicket(ticket))
+         continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol)
+         continue;
+      if((int)PositionGetInteger(POSITION_MAGIC) != InpMagic)
+         continue;
+      bool closed = g_trade.PositionClose(ticket);
+      LogWithPrices(StringFormat("[EXIT-CLOSE] ticket=%I64u reason=%s ok=%s", ticket, reason, closed ? "true" : "false"));
+     }
+  }
+
+double GetM1LiveOsmaValue()
+  {
+   double val[];
+   ArrayResize(val, 1);
+   if(CopyBuffer(g_tfs[0].osma_handle, 0, 0, 1, val) != 1)
+      return 0.0;
+   return val[0];
+  }
+
+bool EntryCooldownPass(int direction)
+  {
+   int bars_total = iBars(_Symbol, PERIOD_M1);
+   datetime bar_time = iTime(_Symbol, PERIOD_M1, 0);
+
+   if(g_v2_last_entry_bar_time == bar_time && g_v2_last_entry_direction == direction)
+      return false;
+
+   if(g_v2_last_entry_bars_total >= 0 && (bars_total - g_v2_last_entry_bars_total) < InpV2EntryCooldownBarsM1)
+      return false;
+
    return true;
   }
 
@@ -654,6 +844,18 @@ void ManagePositions(bool strong_buy, bool strong_sell)
    if(trailing_dist <= 0.0)
       trailing_dist = 50.0 * _Point;
 
+   RefreshV2RiskState();
+   if(InpV2EnableRiskGuard && InpV2AutoCloseOnGuardBreach && (g_v2_guard_dd || g_v2_guard_float || g_v2_guard_load))
+     {
+      LogWithPrices(StringFormat("[RISK-GUARD] breach=%s dd=%.2f float=%.2f load=%.2f action=close-all",
+                                 g_v2_guard_reason,
+                                 g_v2_current_drawdown_pct,
+                                 g_v2_current_floating_loss_pct,
+                                 g_v2_current_deposit_load_pct));
+      EmergencyCloseAllManaged(g_v2_guard_reason);
+      return;
+     }
+
    for(int i = PositionsTotal() - 1; i >= 0; i--)
      {
       ulong ticket = PositionGetTicket(i);
@@ -672,6 +874,19 @@ void ManagePositions(bool strong_buy, bool strong_sell)
       double tp = PositionGetDouble(POSITION_TP);
       double profit = PositionGetDouble(POSITION_PROFIT);
       string comment = PositionGetString(POSITION_COMMENT);
+      datetime open_time = (datetime)PositionGetInteger(POSITION_TIME);
+
+      if(InpV2TimeStopBarsM1 > 0)
+        {
+         int age_bars = iBarShift(_Symbol, PERIOD_M1, open_time, false);
+         if(age_bars >= InpV2TimeStopBarsM1 && profit <= 0.0)
+           {
+            bool closed_ts = g_trade.PositionClose(ticket);
+            LogWithPrices(StringFormat("[EXIT-CLOSE] ticket=%I64u reason=time-stop ageBars=%d profit=%.2f ok=%s",
+                                       ticket, age_bars, profit, closed_ts ? "true" : "false"));
+            continue;
+           }
+        }
 
       if(profit > 0.0)
         {
@@ -774,26 +989,58 @@ bool PlaceEntry(int direction, string ent, string ext, string sig)
    string sid = BuildSid();
    string comment = "SID:" + sid + "|ENT:" + ent + "|EXT:" + ext + "|SIG:" + sig;
    string side = direction > 0 ? "BUY" : "SELL";
+   double lot = ComputeEntryLot();
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   double px = direction > 0 ? ask : bid;
+   double sl = ComputeInitialSlPrice(direction, px);
+
+   double margin_req = 0.0;
+   ENUM_ORDER_TYPE ot = direction > 0 ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
+   if(!OrderCalcMargin(ot, _Symbol, lot, px, margin_req))
+     {
+      LogWithPrices(StringFormat("[ENTRY-BLOCK] side=%s reason=margin-calc-failed lot=%.2f err=%d", side, lot, GetLastError()));
+      return false;
+     }
+   double free_margin = AccountInfoDouble(ACCOUNT_MARGIN_FREE);
+   if(free_margin <= margin_req * 1.1)
+     {
+      LogWithPrices(StringFormat("[ENTRY-BLOCK] side=%s reason=insufficient-free-margin lot=%.2f free=%.2f need=%.2f",
+                                 side, lot, free_margin, margin_req));
+      return false;
+     }
 
    if(InpDryRun)
      {
       g_last_recommendation = (direction > 0 ? "BUY " : "SELL ") + comment;
-      LogWithPrices(StringFormat("[ENTRY-DRYRUN] side=%s mode=%s lot=%.2f comment=%s",
-                                 side, StrategyModeToString(InpStrategyMode), InpFixedLot, comment));
+      LogWithPrices(StringFormat("[ENTRY-DRYRUN] side=%s mode=%s lot=%.2f sl=%s comment=%s",
+                                 side, StrategyModeToString(InpStrategyMode), lot, DoubleToString(sl, _Digits), comment));
       return true;
      }
 
    if(direction > 0)
      {
-      bool ok = g_trade.Buy(InpFixedLot, _Symbol, 0.0, 0.0, 0.0, comment);
-      LogWithPrices(StringFormat("[ENTRY-SEND] side=%s mode=%s lot=%.2f ok=%s retcode=%u comment=%s",
-                                 side, StrategyModeToString(InpStrategyMode), InpFixedLot, ok ? "true" : "false", g_trade.ResultRetcode(), comment));
+      bool ok = g_trade.Buy(lot, _Symbol, 0.0, sl, 0.0, comment);
+      LogWithPrices(StringFormat("[ENTRY-SEND] side=%s mode=%s lot=%.2f sl=%s ok=%s retcode=%u comment=%s",
+                                 side, StrategyModeToString(InpStrategyMode), lot, DoubleToString(sl, _Digits), ok ? "true" : "false", g_trade.ResultRetcode(), comment));
+      if(ok)
+        {
+         g_v2_last_entry_bar_time = iTime(_Symbol, PERIOD_M1, 0);
+         g_v2_last_entry_direction = direction;
+         g_v2_last_entry_bars_total = iBars(_Symbol, PERIOD_M1);
+        }
       return ok;
      }
 
-   bool ok = g_trade.Sell(InpFixedLot, _Symbol, 0.0, 0.0, 0.0, comment);
-   LogWithPrices(StringFormat("[ENTRY-SEND] side=%s mode=%s lot=%.2f ok=%s retcode=%u comment=%s",
-                              side, StrategyModeToString(InpStrategyMode), InpFixedLot, ok ? "true" : "false", g_trade.ResultRetcode(), comment));
+   bool ok = g_trade.Sell(lot, _Symbol, 0.0, sl, 0.0, comment);
+   LogWithPrices(StringFormat("[ENTRY-SEND] side=%s mode=%s lot=%.2f sl=%s ok=%s retcode=%u comment=%s",
+                              side, StrategyModeToString(InpStrategyMode), lot, DoubleToString(sl, _Digits), ok ? "true" : "false", g_trade.ResultRetcode(), comment));
+   if(ok)
+     {
+      g_v2_last_entry_bar_time = iTime(_Symbol, PERIOD_M1, 0);
+      g_v2_last_entry_direction = direction;
+      g_v2_last_entry_bars_total = iBars(_Symbol, PERIOD_M1);
+     }
    return ok;
   }
 
@@ -918,10 +1165,59 @@ bool IsM1AboutToCrossDownTickSideOptionV1()
 
 bool EntryAllowedOptionV1(int direction)
   {
+   g_v2_entry_block_reason = "NONE";
+   g_v2_last_risk_guard_pass = true;
+   g_v2_last_cooldown_pass = true;
+   g_v2_last_trend_consensus_pass = true;
+   g_v2_last_osma_pass = true;
+
+   if(!RiskGuardsAllowEntry())
+     {
+      LogWithPrices(StringFormat("[ENTRY-BLOCK][OPTIONV1] dir=%s reason=%s", direction > 0 ? "BUY" : "SELL", g_v2_entry_block_reason));
+      return false;
+     }
+
+   if(!EntryCooldownPass(direction))
+     {
+      g_v2_last_cooldown_pass = false;
+      g_v2_entry_block_reason = "ENTRY_COOLDOWN";
+      LogWithPrices(StringFormat("[ENTRY-BLOCK][OPTIONV1] dir=%s reason=%s", direction > 0 ? "BUY" : "SELL", g_v2_entry_block_reason));
+      return false;
+     }
+
+   if(InpV2RequireTrendConsensusM1M5)
+     {
+      TrendDirection d1 = GetM1TrendOptionV1();
+      TrendDirection d5 = g_tfs[1].state.direction;
+      bool conflict = (direction > 0 && (d1 == TREND_DOWN || d5 == TREND_DOWN)) ||
+                      (direction < 0 && (d1 == TREND_UP || d5 == TREND_UP));
+      if(conflict)
+        {
+         g_v2_last_trend_consensus_pass = false;
+         g_v2_entry_block_reason = "TREND_CONSENSUS_FAIL";
+         LogWithPrices(StringFormat("[ENTRY-BLOCK][OPTIONV1] dir=%s reason=%s", direction > 0 ? "BUY" : "SELL", g_v2_entry_block_reason));
+         return false;
+        }
+     }
+
+   if(InpV2RequireOsmaAgreementM1)
+     {
+      double osma0 = GetM1LiveOsmaValue();
+      bool osma_ok = (direction > 0 && osma0 >= 0.0) || (direction < 0 && osma0 <= 0.0);
+      if(!osma_ok)
+        {
+         g_v2_last_osma_pass = false;
+         g_v2_entry_block_reason = "OSMA_CONFLICT";
+         LogWithPrices(StringFormat("[ENTRY-BLOCK][OPTIONV1] dir=%s reason=%s osma=%.5f", direction > 0 ? "BUY" : "SELL", g_v2_entry_block_reason, osma0));
+         return false;
+        }
+     }
+
    if(InpOptionV1UseOsmaJustCrossBlock)
      {
       if(g_tfs[0].state.osma_just_cross_up || g_tfs[0].state.osma_just_cross_down)
         {
+         g_v2_entry_block_reason = "LEGACY_OSMA_JUST_CROSS";
          LogWithPrices(StringFormat("[ENTRY-BLOCK][OPTIONV1] dir=%s reason=M1 OsMA just crossed", direction > 0 ? "BUY" : "SELL"));
          return false;
         }
@@ -932,6 +1228,7 @@ bool EntryAllowedOptionV1(int direction)
       bool m1_peak_block = g_tfs[0].state.peak_bottom_reached_1334 && !(g_tfs[0].state.phase == PHASE_FLAT_ABOUT_TO_CROSS || g_tfs[0].state.phase == PHASE_RUNNING_CONTINUED);
       if(m1_peak_block)
         {
+         g_v2_entry_block_reason = "LEGACY_M1_PEAK_PHASE";
          LogWithPrices(StringFormat("[ENTRY-BLOCK][OPTIONV1] dir=%s reason=M1 peak/phase block", direction > 0 ? "BUY" : "SELL"));
          return false;
         }
@@ -942,6 +1239,7 @@ bool EntryAllowedOptionV1(int direction)
       bool m5_peak_block = g_tfs[1].state.peak_bottom_reached_1334 && !(g_tfs[1].state.phase == PHASE_FLAT_ABOUT_TO_CROSS || g_tfs[1].state.phase == PHASE_RUNNING_CONTINUED);
       if(m5_peak_block)
         {
+         g_v2_entry_block_reason = "LEGACY_M5_PEAK_PHASE";
          LogWithPrices(StringFormat("[ENTRY-BLOCK][OPTIONV1] dir=%s reason=M5 peak/phase block", direction > 0 ? "BUY" : "SELL"));
          return false;
         }
@@ -951,11 +1249,13 @@ bool EntryAllowedOptionV1(int direction)
      {
       if(direction > 0 && g_tfs[0].state.direction == TREND_DOWN && g_tfs[1].state.direction == TREND_DOWN)
         {
+         g_v2_entry_block_reason = "LEGACY_M1M5_DIR";
          LogWithPrices("[ENTRY-BLOCK][OPTIONV1] dir=BUY reason=M1+M5 direction both DOWN");
          return false;
         }
       if(direction < 0 && g_tfs[0].state.direction == TREND_UP && g_tfs[1].state.direction == TREND_UP)
         {
+         g_v2_entry_block_reason = "LEGACY_M1M5_DIR";
          LogWithPrices("[ENTRY-BLOCK][OPTIONV1] dir=SELL reason=M1+M5 direction both UP");
          return false;
         }
@@ -987,7 +1287,7 @@ bool ShouldOpenBuyOptionV1(int osma_buy, int ema_buy, bool strong_buy)
    bool allowed = EntryAllowedOptionV1(1);
    bool result = trend_up && about_up && allowed;
    double diff = g_tfs[0].state.ema13_value - g_tfs[0].state.ema34_value;
-   LogWithPrices(StringFormat("[ENTRY-EVAL][OPTIONV1] side=BUY trendUp=%s fastSwitchUp=%s ema150=%s ema200=%s sma2=%s sma5=%s aboutCrossUp=%s nearUp=%s bar0Cross34=%s ema13=%s ema34=%s diff=%s nearPts=%.1f filters=%s result=%s liveBarTime=%s tickTime=%s emaShift=0",
+   LogWithPrices(StringFormat("[ENTRY-EVAL][OPTIONV1] side=BUY trendUp=%s fastSwitchUp=%s ema150=%s ema200=%s sma2=%s sma5=%s aboutCrossUp=%s nearUp=%s bar0Cross34=%s ema13=%s ema34=%s diff=%s nearPts=%.1f filters=%s riskGuardPass=%s cooldownPass=%s trendConsensusPass=%s osmaPass=%s blockReason=%s result=%s liveBarTime=%s tickTime=%s emaShift=0",
                               trend_up ? "true" : "false",
                               fast_switch_up ? "true" : "false",
                               DoubleToString(g_tfs[0].state.ema150_value, _Digits),
@@ -1002,6 +1302,11 @@ bool ShouldOpenBuyOptionV1(int osma_buy, int ema_buy, bool strong_buy)
                               DoubleToString(diff, _Digits),
                               InpOptionV1NearCrossThresholdPoints,
                               allowed ? "true" : "false",
+                              g_v2_last_risk_guard_pass ? "true" : "false",
+                              g_v2_last_cooldown_pass ? "true" : "false",
+                              g_v2_last_trend_consensus_pass ? "true" : "false",
+                              g_v2_last_osma_pass ? "true" : "false",
+                              g_v2_entry_block_reason,
                               result ? "true" : "false",
                               TimeToString(g_tfs[0].state.optionv1_live_bar_time, TIME_DATE|TIME_MINUTES|TIME_SECONDS),
                               TimeToString(TimeCurrent(), TIME_DATE|TIME_MINUTES|TIME_SECONDS)));
@@ -1031,7 +1336,7 @@ bool ShouldOpenSellOptionV1(int osma_sell, int ema_sell, bool strong_sell)
    bool allowed = EntryAllowedOptionV1(-1);
    bool result = trend_down && about_down && allowed;
    double diff = g_tfs[0].state.ema13_value - g_tfs[0].state.ema34_value;
-   LogWithPrices(StringFormat("[ENTRY-EVAL][OPTIONV1] side=SELL trendDown=%s fastSwitchDown=%s ema150=%s ema200=%s sma2=%s sma5=%s aboutCrossDown=%s nearDown=%s bar0Cross34=%s ema13=%s ema34=%s diff=%s nearPts=%.1f filters=%s result=%s liveBarTime=%s tickTime=%s emaShift=0",
+   LogWithPrices(StringFormat("[ENTRY-EVAL][OPTIONV1] side=SELL trendDown=%s fastSwitchDown=%s ema150=%s ema200=%s sma2=%s sma5=%s aboutCrossDown=%s nearDown=%s bar0Cross34=%s ema13=%s ema34=%s diff=%s nearPts=%.1f filters=%s riskGuardPass=%s cooldownPass=%s trendConsensusPass=%s osmaPass=%s blockReason=%s result=%s liveBarTime=%s tickTime=%s emaShift=0",
                               trend_down ? "true" : "false",
                               fast_switch_down ? "true" : "false",
                               DoubleToString(g_tfs[0].state.ema150_value, _Digits),
@@ -1046,6 +1351,11 @@ bool ShouldOpenSellOptionV1(int osma_sell, int ema_sell, bool strong_sell)
                               DoubleToString(diff, _Digits),
                               InpOptionV1NearCrossThresholdPoints,
                               allowed ? "true" : "false",
+                              g_v2_last_risk_guard_pass ? "true" : "false",
+                              g_v2_last_cooldown_pass ? "true" : "false",
+                              g_v2_last_trend_consensus_pass ? "true" : "false",
+                              g_v2_last_osma_pass ? "true" : "false",
+                              g_v2_entry_block_reason,
                               result ? "true" : "false",
                               TimeToString(g_tfs[0].state.optionv1_live_bar_time, TIME_DATE|TIME_MINUTES|TIME_SECONDS),
                               TimeToString(TimeCurrent(), TIME_DATE|TIME_MINUTES|TIME_SECONDS)));
@@ -1097,6 +1407,17 @@ void EvaluateSignalsAndTrade()
                               strong_sell ? "true" : "false"));
 
    ManagePositions(strong_buy, strong_sell);
+
+   if(!RiskGuardsAllowEntry())
+     {
+      LogWithPrices(StringFormat("[ENTRY-BLOCK] reason=%s dd=%.2f float=%.2f load=%.2f openPos=%d",
+                                 g_v2_entry_block_reason,
+                                 g_v2_current_drawdown_pct,
+                                 g_v2_current_floating_loss_pct,
+                                 g_v2_current_deposit_load_pct,
+                                 g_v2_current_open_positions));
+      return;
+     }
 
    bool should_open_buy = ShouldOpenBuy(InpStrategyMode, osma_buy, ema_buy, strong_buy);
    bool should_open_sell = ShouldOpenSell(InpStrategyMode, osma_sell, ema_sell, strong_sell);
@@ -1179,6 +1500,8 @@ string BuildBarStatsJson(const BarStats &b)
 
 void WriteJsonState()
   {
+   RefreshV2RiskState();
+
    string json = "{";
 
    json += "\"meta\":{";
@@ -1195,6 +1518,21 @@ void WriteJsonState()
    json += "\"useM1PeakPhaseBlock\":" + BoolJson(InpOptionV1UseM1PeakPhaseBlock) + ",";
    json += "\"useM5PeakPhaseBlock\":" + BoolJson(InpOptionV1UseM5PeakPhaseBlock) + ",";
    json += "\"useDirectionBlock\":" + BoolJson(InpOptionV1UseM1M5DirectionBlock);
+   json += "},";
+   json += "\"v2Risk\":{";
+   json += "\"enabled\":" + BoolJson(InpV2EnableRiskGuard) + ",";
+   json += "\"maxEquityDrawdownPct\":" + DoubleToString(InpV2MaxEquityDrawdownPct, 2) + ",";
+   json += "\"maxFloatingLossPct\":" + DoubleToString(InpV2MaxFloatingLossPct, 2) + ",";
+   json += "\"maxDepositLoadPct\":" + DoubleToString(InpV2MaxDepositLoadPct, 2) + ",";
+   json += "\"maxOpenPositions\":" + IntegerToString(InpV2MaxOpenPositions) + ",";
+   json += "\"entryCooldownBarsM1\":" + IntegerToString(InpV2EntryCooldownBarsM1) + ",";
+   json += "\"requireTrendConsensusM1M5\":" + BoolJson(InpV2RequireTrendConsensusM1M5) + ",";
+   json += "\"requireOsmaAgreementM1\":" + BoolJson(InpV2RequireOsmaAgreementM1) + ",";
+   json += "\"initialSlAtrMult\":" + DoubleToString(InpV2InitialSlAtrMult, 2) + ",";
+   json += "\"timeStopBarsM1\":" + IntegerToString(InpV2TimeStopBarsM1) + ",";
+   json += "\"autoCloseOnGuardBreach\":" + BoolJson(InpV2AutoCloseOnGuardBreach) + ",";
+   json += "\"useDynamicLotCap\":" + BoolJson(InpV2UseDynamicLotCap) + ",";
+   json += "\"maxLotByEquity\":" + DoubleToString(InpV2MaxLotByEquity, 2);
    json += "},";
    json += "\"updatedAt\":" + TimeToJson(TimeCurrent()) + ",";
    json += "\"recommendation\":\"" + JsonEscape(g_last_recommendation) + "\"";
@@ -1327,6 +1665,28 @@ void WriteJsonState()
    json += "}";
    json += "},";
 
+   json += "\"risk\":{";
+   json += "\"equityPeak\":" + DoubleToString(g_v2_equity_peak, 2) + ",";
+   json += "\"currentEquity\":" + DoubleToString(g_v2_current_equity, 2) + ",";
+   json += "\"drawdownPct\":" + DoubleToString(g_v2_current_drawdown_pct, 2) + ",";
+   json += "\"floatingProfit\":" + DoubleToString(g_v2_current_floating_profit, 2) + ",";
+   json += "\"floatingLossPct\":" + DoubleToString(g_v2_current_floating_loss_pct, 2) + ",";
+   json += "\"depositLoadPct\":" + DoubleToString(g_v2_current_deposit_load_pct, 2) + ",";
+   json += "\"openPositions\":" + IntegerToString(g_v2_current_open_positions) + ",";
+   json += "\"guardBreached\":" + BoolJson(g_v2_guard_breached) + ",";
+   json += "\"guardReason\":\"" + JsonEscape(g_v2_guard_reason) + "\"";
+   json += "},";
+
+   json += "\"entryGate\":{";
+   json += "\"riskGuardPass\":" + BoolJson(g_v2_last_risk_guard_pass) + ",";
+   json += "\"cooldownPass\":" + BoolJson(g_v2_last_cooldown_pass) + ",";
+   json += "\"trendConsensusPass\":" + BoolJson(g_v2_last_trend_consensus_pass) + ",";
+   json += "\"osmaPass\":" + BoolJson(g_v2_last_osma_pass) + ",";
+   json += "\"blockReason\":\"" + JsonEscape(g_v2_entry_block_reason) + "\",";
+   json += "\"lastEntryBarTime\":" + TimeToJson(g_v2_last_entry_bar_time) + ",";
+   json += "\"lastEntryDirection\":" + IntegerToString(g_v2_last_entry_direction);
+   json += "},";
+
    json += "\"bar_monitor\":{";
    json += "\"previous_bar\":{";
    json += "\"color\":\"" + g_tfs[0].state.bars.prev_color + "\",";
@@ -1457,6 +1817,13 @@ bool UpdateTimeframe(int tf_idx)
 int OnInit()
   {
    g_trade.SetExpertMagicNumber(InpMagic);
+   g_v2_current_equity = AccountInfoDouble(ACCOUNT_EQUITY);
+   g_v2_equity_peak = g_v2_current_equity;
+   g_v2_entry_block_reason = "NONE";
+   g_v2_guard_reason = "NONE";
+   g_v2_last_entry_bar_time = 0;
+   g_v2_last_entry_direction = 0;
+   g_v2_last_entry_bars_total = -1;
 
    for(int i = 0; i < TF_COUNT; i++)
      {

@@ -1,0 +1,38 @@
+; saved on 2026.02.08 05:10:41
+; this file contains input parameters for testing/optimizing MTF_OsMA_EMA_Telemetry_EA expert advisor
+; to use it in the strategy tester, click Load in the context menu of the Inputs tab
+;
+InpDryRun=false||false||0||true||N
+InpStrategyMode=1||0||0||1||N
+InpFixedLot=.01||0.01||0.001000||0.100000||N
+InpMinAlignedTF=4||4||1||40||N
+InpMagic=13034||13034||1||130340||N
+InpAtrSpikeK=2.0||2.0||0.200000||20.000000||N
+InpAtrPeriod=14||14||1||140||N
+InpNearCrossThresholdPoints=80||80.0||8.000000||800.000000||N
+InpConvergenceBars=3||3||1||30||N
+InpProjectionHorizonBars=1||1||1||10||N
+InpJsonFile=ea_multitf_state.json
+InpEnableScalpRules=false||false||0||true||N
+InpEnableSwingRules=false||false||0||true||N
+InpOsmaSignal=9||3||1||30||N
+InpOsmaFast=3||12||1||120||N
+InpOsmaSlow=15||59||1||590||N
+InpOptionV1NearCrossThresholdPoints=120||80.0||8.000000||800.000000||N
+InpOptionV1UseOsmaJustCrossBlock=true||false||0||true||N
+InpOptionV1UseM1PeakPhaseBlock=true||false||0||true||N
+InpOptionV1UseM5PeakPhaseBlock=true||false||0||true||N
+InpOptionV1UseM1M5DirectionBlock=true||false||0||true||N
+InpV2EnableRiskGuard=true||true||0||true||N
+InpV2MaxEquityDrawdownPct=20.0||20.0||2.000000||200.000000||N
+InpV2MaxFloatingLossPct=8.0||8.0||0.800000||80.000000||N
+InpV2MaxDepositLoadPct=12.0||12.0||1.200000||120.000000||N
+InpV2MaxOpenPositions=3||3||1||30||N
+InpV2EntryCooldownBarsM1=3||3||1||30||N
+InpV2RequireTrendConsensusM1M5=true||true||0||true||N
+InpV2RequireOsmaAgreementM1=true||true||0||true||N
+InpV2InitialSlAtrMult=1.2||1.2||0.120000||12.000000||N
+InpV2TimeStopBarsM1=30||30||1||300||N
+InpV2AutoCloseOnGuardBreach=true||true||0||true||N
+InpV2UseDynamicLotCap=true||true||0||true||N
+InpV2MaxLotByEquity=.01||0.01||0.001000||0.100000||N
