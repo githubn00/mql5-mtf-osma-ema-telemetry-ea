@@ -113,6 +113,7 @@ struct TfState
    double ema200_value;
    double ema13_value;
    double ema34_value;
+   datetime optionv1_live_bar_time;
 
    int bar_pos_vs_ma[MA_COUNT];
    BarStats bars;
@@ -819,6 +820,27 @@ TrendDirection GetM1TrendOptionV1()
    return TREND_FLAT;
   }
 
+bool RefreshM1LiveOptionV1MAs()
+  {
+   double v[];
+   ArrayResize(v, 1);
+
+   if(CopyBuffer(g_tfs[0].ma_handles[MA_EMA150], 0, 0, 1, v) != 1) return false;
+   g_tfs[0].state.ema150_value = v[0];
+
+   if(CopyBuffer(g_tfs[0].ma_handles[MA_EMA200], 0, 0, 1, v) != 1) return false;
+   g_tfs[0].state.ema200_value = v[0];
+
+   if(CopyBuffer(g_tfs[0].ma_handles[MA_EMA13], 0, 0, 1, v) != 1) return false;
+   g_tfs[0].state.ema13_value = v[0];
+
+   if(CopyBuffer(g_tfs[0].ma_handles[MA_EMA34], 0, 0, 1, v) != 1) return false;
+   g_tfs[0].state.ema34_value = v[0];
+
+   g_tfs[0].state.optionv1_live_bar_time = iTime(_Symbol, PERIOD_M1, 0);
+   return true;
+  }
+
 bool IsM1TrendUpOptionV1()
   {
    return GetM1TrendOptionV1() == TREND_UP;
@@ -891,12 +913,18 @@ bool EntryAllowedOptionV1(int direction)
 
 bool ShouldOpenBuyOptionV1(int osma_buy, int ema_buy, bool strong_buy)
   {
+   if(!RefreshM1LiveOptionV1MAs())
+     {
+      LogWithPrices(StringFormat("[ENTRY-BLOCK][OPTIONV1] dir=BUY reason=failed-to-refresh-live-m1-mas err=%d", GetLastError()));
+      return false;
+     }
+
    bool trend_up = IsM1TrendUpOptionV1();
    bool about_up = IsM1AboutToCrossUpTickSideOptionV1();
    bool allowed = EntryAllowedOptionV1(1);
    bool result = trend_up && about_up && allowed;
    double diff = g_tfs[0].state.ema13_value - g_tfs[0].state.ema34_value;
-   LogWithPrices(StringFormat("[ENTRY-EVAL][OPTIONV1] side=BUY trend(150>200)=%s ema150=%s ema200=%s aboutCrossUp=%s ema13=%s ema34=%s diff=%s nearPts=%.1f filters=%s result=%s",
+   LogWithPrices(StringFormat("[ENTRY-EVAL][OPTIONV1] side=BUY trend(150>200)=%s ema150=%s ema200=%s aboutCrossUp=%s ema13=%s ema34=%s diff=%s nearPts=%.1f filters=%s result=%s liveBarTime=%s tickTime=%s emaShift=0",
                               trend_up ? "true" : "false",
                               DoubleToString(g_tfs[0].state.ema150_value, _Digits),
                               DoubleToString(g_tfs[0].state.ema200_value, _Digits),
@@ -906,18 +934,26 @@ bool ShouldOpenBuyOptionV1(int osma_buy, int ema_buy, bool strong_buy)
                               DoubleToString(diff, _Digits),
                               InpOptionV1NearCrossThresholdPoints,
                               allowed ? "true" : "false",
-                              result ? "true" : "false"));
+                              result ? "true" : "false",
+                              TimeToString(g_tfs[0].state.optionv1_live_bar_time, TIME_DATE|TIME_MINUTES|TIME_SECONDS),
+                              TimeToString(TimeCurrent(), TIME_DATE|TIME_MINUTES|TIME_SECONDS)));
    return result;
   }
 
 bool ShouldOpenSellOptionV1(int osma_sell, int ema_sell, bool strong_sell)
   {
+   if(!RefreshM1LiveOptionV1MAs())
+     {
+      LogWithPrices(StringFormat("[ENTRY-BLOCK][OPTIONV1] dir=SELL reason=failed-to-refresh-live-m1-mas err=%d", GetLastError()));
+      return false;
+     }
+
    bool trend_down = IsM1TrendDownOptionV1();
    bool about_down = IsM1AboutToCrossDownTickSideOptionV1();
    bool allowed = EntryAllowedOptionV1(-1);
    bool result = trend_down && about_down && allowed;
    double diff = g_tfs[0].state.ema13_value - g_tfs[0].state.ema34_value;
-   LogWithPrices(StringFormat("[ENTRY-EVAL][OPTIONV1] side=SELL trend(150<200)=%s ema150=%s ema200=%s aboutCrossDown=%s ema13=%s ema34=%s diff=%s nearPts=%.1f filters=%s result=%s",
+   LogWithPrices(StringFormat("[ENTRY-EVAL][OPTIONV1] side=SELL trend(150<200)=%s ema150=%s ema200=%s aboutCrossDown=%s ema13=%s ema34=%s diff=%s nearPts=%.1f filters=%s result=%s liveBarTime=%s tickTime=%s emaShift=0",
                               trend_down ? "true" : "false",
                               DoubleToString(g_tfs[0].state.ema150_value, _Digits),
                               DoubleToString(g_tfs[0].state.ema200_value, _Digits),
@@ -927,7 +963,9 @@ bool ShouldOpenSellOptionV1(int osma_sell, int ema_sell, bool strong_sell)
                               DoubleToString(diff, _Digits),
                               InpOptionV1NearCrossThresholdPoints,
                               allowed ? "true" : "false",
-                              result ? "true" : "false"));
+                              result ? "true" : "false",
+                              TimeToString(g_tfs[0].state.optionv1_live_bar_time, TIME_DATE|TIME_MINUTES|TIME_SECONDS),
+                              TimeToString(TimeCurrent(), TIME_DATE|TIME_MINUTES|TIME_SECONDS)));
    return result;
   }
 
@@ -1357,6 +1395,7 @@ int OnInit()
       g_tfs[i].state.ema200_value = 0.0;
       g_tfs[i].state.ema13_value = 0.0;
       g_tfs[i].state.ema34_value = 0.0;
+      g_tfs[i].state.optionv1_live_bar_time = 0;
 
       for(int a = 0; a < MA_COUNT; a++)
         {
