@@ -83,7 +83,41 @@ Important runtime switch:
 - For real orders, set `InpDryRun = false`.
 - Entry strategy mode is selected with `InpStrategyMode`:
 - `STRAT_BASE` keeps current entry logic.
-- `STRAT_OPTION_V1` is a placeholder mode for upcoming custom entry rules.
+- `STRAT_OPTION_V1` uses M1 trend + M1 pre-cross rules (below).
+
+## OptionV1 Entry Strategy
+
+`STRAT_OPTION_V1` is an M1-only entry model.
+
+### Buy entry
+
+All must be true:
+
+1. M1 trend up: `EMA150 > EMA200`.
+2. M1 about-to-cross up (tick-side): `EMA13 < EMA34` and `abs(EMA13-EMA34) <= InpOptionV1NearCrossThresholdPoints * _Point`.
+3. `EntryAllowedOptionV1(+1)` passes optional protection filters.
+
+### Sell entry
+
+All must be true:
+
+1. M1 trend down: `EMA150 < EMA200`.
+2. M1 about-to-cross down (tick-side): `EMA13 > EMA34` and `abs(EMA13-EMA34) <= InpOptionV1NearCrossThresholdPoints * _Point`.
+3. `EntryAllowedOptionV1(-1)` passes optional protection filters.
+
+### OptionV1 inputs
+
+- `InpOptionV1NearCrossThresholdPoints=80.0`
+- `InpOptionV1UseOsmaJustCrossBlock=true`
+- `InpOptionV1UseM1PeakPhaseBlock=true`
+- `InpOptionV1UseM5PeakPhaseBlock=true`
+- `InpOptionV1UseM1M5DirectionBlock=true`
+
+These blocks mirror legacy protections and can be disabled individually for testing.
+
+### Scope note
+
+OptionV1 changes entry conditions only. Position exit/risk management remains unchanged (`ManagePositions`).
 
 ## What triggers closing positions
 
@@ -128,6 +162,11 @@ Top-level keys:
 
 1. `meta`
 - `symbol`, `magic`, `dryRun`, `strategyMode`, `updatedAt`, `recommendation`
+- `optionV1` diagnostics:
+  - `m1Trend`
+  - `nearCrossThresholdPoints`
+  - `aboutToCrossUpTickSide`, `aboutToCrossDownTickSide`
+  - `useOsmaBlock`, `useM1PeakPhaseBlock`, `useM5PeakPhaseBlock`, `useDirectionBlock`
 2. `historical`
 - `ema150_200_d1_crosses` (latest capped list)
 - `per_tf` object keyed by timeframe (`M1`,`M5`,`M15`,`H1`,`H4`,`D1`)
@@ -160,6 +199,16 @@ Compact example:
     "magic": 13034,
     "dryRun": true,
     "strategyMode": "Base",
+    "optionV1": {
+      "m1Trend": "Flat",
+      "nearCrossThresholdPoints": 80.0,
+      "aboutToCrossUpTickSide": false,
+      "aboutToCrossDownTickSide": false,
+      "useOsmaBlock": true,
+      "useM1PeakPhaseBlock": true,
+      "useM5PeakPhaseBlock": true,
+      "useDirectionBlock": true
+    },
     "updatedAt": 1738972800,
     "recommendation": "BUY SID:..."
   },

@@ -109,6 +109,11 @@ struct TfState
    int bars_after_cross_1334;
    int bars_after_cross_150200;
 
+   double ema150_value;
+   double ema200_value;
+   double ema13_value;
+   double ema34_value;
+
    int bar_pos_vs_ma[MA_COUNT];
    BarStats bars;
   };
@@ -160,6 +165,11 @@ input bool InpEnableSwingRules = true;
 input int InpOsmaSignal = 3;
 input int InpOsmaFast = 12;
 input int InpOsmaSlow = 59;
+input double InpOptionV1NearCrossThresholdPoints = 80.0;
+input bool InpOptionV1UseOsmaJustCrossBlock = true;
+input bool InpOptionV1UseM1PeakPhaseBlock = true;
+input bool InpOptionV1UseM5PeakPhaseBlock = true;
+input bool InpOptionV1UseM1M5DirectionBlock = true;
 
 CTrade g_trade;
 TfRuntime g_tfs[TF_COUNT];
@@ -737,16 +747,76 @@ bool ShouldOpenSellBase(int osma_sell, int ema_sell, bool strong_sell)
    return strong_sell && EntryAllowed(-1);
   }
 
+TrendDirection GetM1TrendOptionV1()
+  {
+   if(g_tfs[0].state.ema150_value > g_tfs[0].state.ema200_value) return TREND_UP;
+   if(g_tfs[0].state.ema150_value < g_tfs[0].state.ema200_value) return TREND_DOWN;
+   return TREND_FLAT;
+  }
+
+bool IsM1TrendUpOptionV1()
+  {
+   return GetM1TrendOptionV1() == TREND_UP;
+  }
+
+bool IsM1TrendDownOptionV1()
+  {
+   return GetM1TrendOptionV1() == TREND_DOWN;
+  }
+
+bool IsM1AboutToCrossUpTickSideOptionV1()
+  {
+   double diff = g_tfs[0].state.ema13_value - g_tfs[0].state.ema34_value;
+   return (diff < 0.0 && MathAbs(diff) <= InpOptionV1NearCrossThresholdPoints * _Point);
+  }
+
+bool IsM1AboutToCrossDownTickSideOptionV1()
+  {
+   double diff = g_tfs[0].state.ema13_value - g_tfs[0].state.ema34_value;
+   return (diff > 0.0 && MathAbs(diff) <= InpOptionV1NearCrossThresholdPoints * _Point);
+  }
+
+bool EntryAllowedOptionV1(int direction)
+  {
+   if(InpOptionV1UseOsmaJustCrossBlock)
+     {
+      if(g_tfs[0].state.osma_just_cross_up || g_tfs[0].state.osma_just_cross_down)
+         return false;
+     }
+
+   if(InpOptionV1UseM1PeakPhaseBlock)
+     {
+      bool m1_peak_block = g_tfs[0].state.peak_bottom_reached_1334 && !(g_tfs[0].state.phase == PHASE_FLAT_ABOUT_TO_CROSS || g_tfs[0].state.phase == PHASE_RUNNING_CONTINUED);
+      if(m1_peak_block)
+         return false;
+     }
+
+   if(InpOptionV1UseM5PeakPhaseBlock)
+     {
+      bool m5_peak_block = g_tfs[1].state.peak_bottom_reached_1334 && !(g_tfs[1].state.phase == PHASE_FLAT_ABOUT_TO_CROSS || g_tfs[1].state.phase == PHASE_RUNNING_CONTINUED);
+      if(m5_peak_block)
+         return false;
+     }
+
+   if(InpOptionV1UseM1M5DirectionBlock)
+     {
+      if(direction > 0 && g_tfs[0].state.direction == TREND_DOWN && g_tfs[1].state.direction == TREND_DOWN)
+         return false;
+      if(direction < 0 && g_tfs[0].state.direction == TREND_UP && g_tfs[1].state.direction == TREND_UP)
+         return false;
+     }
+
+   return true;
+  }
+
 bool ShouldOpenBuyOptionV1(int osma_buy, int ema_buy, bool strong_buy)
   {
-   // Placeholder: to be replaced with user-defined option strategy entry rules.
-   return false;
+   return IsM1TrendUpOptionV1() && IsM1AboutToCrossUpTickSideOptionV1() && EntryAllowedOptionV1(1);
   }
 
 bool ShouldOpenSellOptionV1(int osma_sell, int ema_sell, bool strong_sell)
   {
-   // Placeholder: to be replaced with user-defined option strategy entry rules.
-   return false;
+   return IsM1TrendDownOptionV1() && IsM1AboutToCrossDownTickSideOptionV1() && EntryAllowedOptionV1(-1);
   }
 
 bool ShouldOpenBuy(StrategyMode mode, int osma_buy, int ema_buy, bool strong_buy)
@@ -878,6 +948,16 @@ void WriteJsonState()
    json += "\"magic\":" + IntegerToString(InpMagic) + ",";
    json += "\"dryRun\":" + BoolJson(InpDryRun) + ",";
    json += "\"strategyMode\":\"" + StrategyModeToString(InpStrategyMode) + "\",";
+   json += "\"optionV1\":{";
+   json += "\"m1Trend\":\"" + TrendToString(GetM1TrendOptionV1()) + "\",";
+   json += "\"nearCrossThresholdPoints\":" + DoubleToString(InpOptionV1NearCrossThresholdPoints, 1) + ",";
+   json += "\"aboutToCrossUpTickSide\":" + BoolJson(IsM1AboutToCrossUpTickSideOptionV1()) + ",";
+   json += "\"aboutToCrossDownTickSide\":" + BoolJson(IsM1AboutToCrossDownTickSideOptionV1()) + ",";
+   json += "\"useOsmaBlock\":" + BoolJson(InpOptionV1UseOsmaJustCrossBlock) + ",";
+   json += "\"useM1PeakPhaseBlock\":" + BoolJson(InpOptionV1UseM1PeakPhaseBlock) + ",";
+   json += "\"useM5PeakPhaseBlock\":" + BoolJson(InpOptionV1UseM5PeakPhaseBlock) + ",";
+   json += "\"useDirectionBlock\":" + BoolJson(InpOptionV1UseM1M5DirectionBlock);
+   json += "},";
    json += "\"updatedAt\":" + TimeToJson(TimeCurrent()) + ",";
    json += "\"recommendation\":\"" + JsonEscape(g_last_recommendation) + "\"";
    json += "},";
@@ -1126,6 +1206,10 @@ bool UpdateTimeframe(int tf_idx)
    ComputeEma1334State(tf_idx, ma_vals);
    ComputeOsmaState(tf_idx, osma);
    ComputeBarStats(tf_idx, rates, atr_buf[1], ma_vals);
+   g_tfs[tf_idx].state.ema150_value = ma_vals[MA_EMA150][1];
+   g_tfs[tf_idx].state.ema200_value = ma_vals[MA_EMA200][1];
+   g_tfs[tf_idx].state.ema13_value = ma_vals[MA_EMA13][1];
+   g_tfs[tf_idx].state.ema34_value = ma_vals[MA_EMA34][1];
 
    return true;
   }
@@ -1152,6 +1236,10 @@ int OnInit()
       g_tfs[i].state.peak_bottom_reached_1334 = false;
       g_tfs[i].state.peak_bottom_type_1334 = "";
       g_tfs[i].state.bars.avg_height = 0.0;
+      g_tfs[i].state.ema150_value = 0.0;
+      g_tfs[i].state.ema200_value = 0.0;
+      g_tfs[i].state.ema13_value = 0.0;
+      g_tfs[i].state.ema34_value = 0.0;
 
       for(int a = 0; a < MA_COUNT; a++)
         {
