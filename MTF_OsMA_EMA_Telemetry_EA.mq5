@@ -186,6 +186,7 @@ input int InpV2TimeStopBarsM1 = 30;
 input bool InpV2AutoCloseOnGuardBreach = true;
 input bool InpV2UseDynamicLotCap = true;
 input double InpV2MaxLotByEquity = 0.01;
+input bool InpOptionV1EntryOnFirstBarCloseAfterCross1334 = true;
 
 CTrade g_trade;
 TfRuntime g_tfs[TF_COUNT];
@@ -1064,27 +1065,6 @@ bool ShouldOpenSellBase(int osma_sell, int ema_sell, bool strong_sell)
 
 TrendDirection GetM1TrendOptionV1()
   {
-   bool fast_all_above_both = (g_tfs[0].state.sma2_value > g_tfs[0].state.ema150_value &&
-                               g_tfs[0].state.sma2_value > g_tfs[0].state.ema200_value &&
-                               g_tfs[0].state.sma5_value > g_tfs[0].state.ema150_value &&
-                               g_tfs[0].state.sma5_value > g_tfs[0].state.ema200_value &&
-                               g_tfs[0].state.ema13_value > g_tfs[0].state.ema150_value &&
-                               g_tfs[0].state.ema13_value > g_tfs[0].state.ema200_value &&
-                               g_tfs[0].state.ema34_value > g_tfs[0].state.ema150_value &&
-                               g_tfs[0].state.ema34_value > g_tfs[0].state.ema200_value);
-
-   bool fast_all_below_both = (g_tfs[0].state.sma2_value < g_tfs[0].state.ema150_value &&
-                               g_tfs[0].state.sma2_value < g_tfs[0].state.ema200_value &&
-                               g_tfs[0].state.sma5_value < g_tfs[0].state.ema150_value &&
-                               g_tfs[0].state.sma5_value < g_tfs[0].state.ema200_value &&
-                               g_tfs[0].state.ema13_value < g_tfs[0].state.ema150_value &&
-                               g_tfs[0].state.ema13_value < g_tfs[0].state.ema200_value &&
-                               g_tfs[0].state.ema34_value < g_tfs[0].state.ema150_value &&
-                               g_tfs[0].state.ema34_value < g_tfs[0].state.ema200_value);
-
-   if(fast_all_above_both) return TREND_UP;
-   if(fast_all_below_both) return TREND_DOWN;
-
    if(g_tfs[0].state.ema150_value > g_tfs[0].state.ema200_value) return TREND_UP;
    if(g_tfs[0].state.ema150_value < g_tfs[0].state.ema200_value) return TREND_DOWN;
    return TREND_FLAT;
@@ -1177,12 +1157,16 @@ bool EntryAllowedOptionV1(int direction)
       return false;
      }
 
-   if(!EntryCooldownPass(direction))
+   bool first_bar_mode = (InpOptionV1EntryOnFirstBarCloseAfterCross1334 && g_tfs[0].state.bars_after_cross_1334 == 1);
+   if(!first_bar_mode)
      {
-      g_v2_last_cooldown_pass = false;
-      g_v2_entry_block_reason = "ENTRY_COOLDOWN";
-      LogWithPrices(StringFormat("[ENTRY-BLOCK][OPTIONV1] dir=%s reason=%s", direction > 0 ? "BUY" : "SELL", g_v2_entry_block_reason));
-      return false;
+      if(!EntryCooldownPass(direction))
+        {
+         g_v2_last_cooldown_pass = false;
+         g_v2_entry_block_reason = "ENTRY_COOLDOWN";
+         LogWithPrices(StringFormat("[ENTRY-BLOCK][OPTIONV1] dir=%s reason=%s", direction > 0 ? "BUY" : "SELL", g_v2_entry_block_reason));
+         return false;
+        }
      }
 
    if(InpV2RequireTrendConsensusM1M5)
@@ -1272,35 +1256,23 @@ bool ShouldOpenBuyOptionV1(int osma_buy, int ema_buy, bool strong_buy)
       return false;
      }
 
-   bool trend_up = IsM1TrendUpOptionV1();
-   bool fast_switch_up = (g_tfs[0].state.sma2_value > g_tfs[0].state.ema150_value &&
-                          g_tfs[0].state.sma2_value > g_tfs[0].state.ema200_value &&
-                          g_tfs[0].state.sma5_value > g_tfs[0].state.ema150_value &&
-                          g_tfs[0].state.sma5_value > g_tfs[0].state.ema200_value &&
-                          g_tfs[0].state.ema13_value > g_tfs[0].state.ema150_value &&
-                          g_tfs[0].state.ema13_value > g_tfs[0].state.ema200_value &&
-                          g_tfs[0].state.ema34_value > g_tfs[0].state.ema150_value &&
-                          g_tfs[0].state.ema34_value > g_tfs[0].state.ema200_value);
-   bool near_up = IsM1NearCrossUpTickSideOptionV1();
-   bool bar0_cross_up = IsM1Bar0CrossedEma34UpOptionV1();
-   bool about_up = near_up && bar0_cross_up;
+   bool trend_up = (g_tfs[0].state.ema150_value > g_tfs[0].state.ema200_value);
+   bool first_bar_after_cross = (!InpOptionV1EntryOnFirstBarCloseAfterCross1334) ||
+                                (g_tfs[0].state.bars_after_cross_1334 == 1 && g_tfs[0].state.direction == TREND_UP);
+   bool cross_trigger_up = first_bar_after_cross;
    bool allowed = EntryAllowedOptionV1(1);
-   bool result = trend_up && about_up && allowed;
+   bool result = trend_up && cross_trigger_up && allowed;
    double diff = g_tfs[0].state.ema13_value - g_tfs[0].state.ema34_value;
-   LogWithPrices(StringFormat("[ENTRY-EVAL][OPTIONV1] side=BUY trendUp=%s fastSwitchUp=%s ema150=%s ema200=%s sma2=%s sma5=%s aboutCrossUp=%s nearUp=%s bar0Cross34=%s ema13=%s ema34=%s diff=%s nearPts=%.1f filters=%s riskGuardPass=%s cooldownPass=%s trendConsensusPass=%s osmaPass=%s blockReason=%s result=%s liveBarTime=%s tickTime=%s emaShift=0",
+   LogWithPrices(StringFormat("[ENTRY-EVAL][OPTIONV1] side=BUY trend(150>200)=%s ema150=%s ema200=%s crossTriggerUp=%s firstBarAfterCross=%s barsAfterCross1334=%d ema13=%s ema34=%s diff=%s filters=%s riskGuardPass=%s cooldownPass=%s trendConsensusPass=%s osmaPass=%s blockReason=%s result=%s liveBarTime=%s tickTime=%s emaShift=0",
                               trend_up ? "true" : "false",
-                              fast_switch_up ? "true" : "false",
                               DoubleToString(g_tfs[0].state.ema150_value, _Digits),
                               DoubleToString(g_tfs[0].state.ema200_value, _Digits),
-                              DoubleToString(g_tfs[0].state.sma2_value, _Digits),
-                              DoubleToString(g_tfs[0].state.sma5_value, _Digits),
-                              about_up ? "true" : "false",
-                              near_up ? "true" : "false",
-                              bar0_cross_up ? "true" : "false",
+                              cross_trigger_up ? "true" : "false",
+                              first_bar_after_cross ? "true" : "false",
+                              g_tfs[0].state.bars_after_cross_1334,
                               DoubleToString(g_tfs[0].state.ema13_value, _Digits),
                               DoubleToString(g_tfs[0].state.ema34_value, _Digits),
                               DoubleToString(diff, _Digits),
-                              InpOptionV1NearCrossThresholdPoints,
                               allowed ? "true" : "false",
                               g_v2_last_risk_guard_pass ? "true" : "false",
                               g_v2_last_cooldown_pass ? "true" : "false",
@@ -1321,35 +1293,23 @@ bool ShouldOpenSellOptionV1(int osma_sell, int ema_sell, bool strong_sell)
       return false;
      }
 
-   bool trend_down = IsM1TrendDownOptionV1();
-   bool fast_switch_down = (g_tfs[0].state.sma2_value < g_tfs[0].state.ema150_value &&
-                            g_tfs[0].state.sma2_value < g_tfs[0].state.ema200_value &&
-                            g_tfs[0].state.sma5_value < g_tfs[0].state.ema150_value &&
-                            g_tfs[0].state.sma5_value < g_tfs[0].state.ema200_value &&
-                            g_tfs[0].state.ema13_value < g_tfs[0].state.ema150_value &&
-                            g_tfs[0].state.ema13_value < g_tfs[0].state.ema200_value &&
-                            g_tfs[0].state.ema34_value < g_tfs[0].state.ema150_value &&
-                            g_tfs[0].state.ema34_value < g_tfs[0].state.ema200_value);
-   bool near_down = IsM1NearCrossDownTickSideOptionV1();
-   bool bar0_cross_down = IsM1Bar0CrossedEma34DownOptionV1();
-   bool about_down = near_down && bar0_cross_down;
+   bool trend_down = (g_tfs[0].state.ema150_value < g_tfs[0].state.ema200_value);
+   bool first_bar_after_cross = (!InpOptionV1EntryOnFirstBarCloseAfterCross1334) ||
+                                (g_tfs[0].state.bars_after_cross_1334 == 1 && g_tfs[0].state.direction == TREND_DOWN);
+   bool cross_trigger_down = first_bar_after_cross;
    bool allowed = EntryAllowedOptionV1(-1);
-   bool result = trend_down && about_down && allowed;
+   bool result = trend_down && cross_trigger_down && allowed;
    double diff = g_tfs[0].state.ema13_value - g_tfs[0].state.ema34_value;
-   LogWithPrices(StringFormat("[ENTRY-EVAL][OPTIONV1] side=SELL trendDown=%s fastSwitchDown=%s ema150=%s ema200=%s sma2=%s sma5=%s aboutCrossDown=%s nearDown=%s bar0Cross34=%s ema13=%s ema34=%s diff=%s nearPts=%.1f filters=%s riskGuardPass=%s cooldownPass=%s trendConsensusPass=%s osmaPass=%s blockReason=%s result=%s liveBarTime=%s tickTime=%s emaShift=0",
+   LogWithPrices(StringFormat("[ENTRY-EVAL][OPTIONV1] side=SELL trend(150<200)=%s ema150=%s ema200=%s crossTriggerDown=%s firstBarAfterCross=%s barsAfterCross1334=%d ema13=%s ema34=%s diff=%s filters=%s riskGuardPass=%s cooldownPass=%s trendConsensusPass=%s osmaPass=%s blockReason=%s result=%s liveBarTime=%s tickTime=%s emaShift=0",
                               trend_down ? "true" : "false",
-                              fast_switch_down ? "true" : "false",
                               DoubleToString(g_tfs[0].state.ema150_value, _Digits),
                               DoubleToString(g_tfs[0].state.ema200_value, _Digits),
-                              DoubleToString(g_tfs[0].state.sma2_value, _Digits),
-                              DoubleToString(g_tfs[0].state.sma5_value, _Digits),
-                              about_down ? "true" : "false",
-                              near_down ? "true" : "false",
-                              bar0_cross_down ? "true" : "false",
+                              cross_trigger_down ? "true" : "false",
+                              first_bar_after_cross ? "true" : "false",
+                              g_tfs[0].state.bars_after_cross_1334,
                               DoubleToString(g_tfs[0].state.ema13_value, _Digits),
                               DoubleToString(g_tfs[0].state.ema34_value, _Digits),
                               DoubleToString(diff, _Digits),
-                              InpOptionV1NearCrossThresholdPoints,
                               allowed ? "true" : "false",
                               g_v2_last_risk_guard_pass ? "true" : "false",
                               g_v2_last_cooldown_pass ? "true" : "false",
