@@ -851,16 +851,40 @@ bool IsM1TrendDownOptionV1()
    return GetM1TrendOptionV1() == TREND_DOWN;
   }
 
-bool IsM1AboutToCrossUpTickSideOptionV1()
+bool IsM1NearCrossUpTickSideOptionV1()
   {
    double diff = g_tfs[0].state.ema13_value - g_tfs[0].state.ema34_value;
    return (diff < 0.0 && MathAbs(diff) <= InpOptionV1NearCrossThresholdPoints * _Point);
   }
 
-bool IsM1AboutToCrossDownTickSideOptionV1()
+bool IsM1NearCrossDownTickSideOptionV1()
   {
    double diff = g_tfs[0].state.ema13_value - g_tfs[0].state.ema34_value;
    return (diff > 0.0 && MathAbs(diff) <= InpOptionV1NearCrossThresholdPoints * _Point);
+  }
+
+bool IsM1Bar0CrossedEma34UpOptionV1()
+  {
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double ema34 = g_tfs[0].state.ema34_value;
+   return (bid >= ema34);
+  }
+
+bool IsM1Bar0CrossedEma34DownOptionV1()
+  {
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double ema34 = g_tfs[0].state.ema34_value;
+   return (bid <= ema34);
+  }
+
+bool IsM1AboutToCrossUpTickSideOptionV1()
+  {
+   return IsM1NearCrossUpTickSideOptionV1() && IsM1Bar0CrossedEma34UpOptionV1();
+  }
+
+bool IsM1AboutToCrossDownTickSideOptionV1()
+  {
+   return IsM1NearCrossDownTickSideOptionV1() && IsM1Bar0CrossedEma34DownOptionV1();
   }
 
 bool EntryAllowedOptionV1(int direction)
@@ -920,15 +944,19 @@ bool ShouldOpenBuyOptionV1(int osma_buy, int ema_buy, bool strong_buy)
      }
 
    bool trend_up = IsM1TrendUpOptionV1();
-   bool about_up = IsM1AboutToCrossUpTickSideOptionV1();
+   bool near_up = IsM1NearCrossUpTickSideOptionV1();
+   bool bar0_cross_up = IsM1Bar0CrossedEma34UpOptionV1();
+   bool about_up = near_up && bar0_cross_up;
    bool allowed = EntryAllowedOptionV1(1);
    bool result = trend_up && about_up && allowed;
    double diff = g_tfs[0].state.ema13_value - g_tfs[0].state.ema34_value;
-   LogWithPrices(StringFormat("[ENTRY-EVAL][OPTIONV1] side=BUY trend(150>200)=%s ema150=%s ema200=%s aboutCrossUp=%s ema13=%s ema34=%s diff=%s nearPts=%.1f filters=%s result=%s liveBarTime=%s tickTime=%s emaShift=0",
+   LogWithPrices(StringFormat("[ENTRY-EVAL][OPTIONV1] side=BUY trend(150>200)=%s ema150=%s ema200=%s aboutCrossUp=%s nearUp=%s bar0Cross34=%s ema13=%s ema34=%s diff=%s nearPts=%.1f filters=%s result=%s liveBarTime=%s tickTime=%s emaShift=0",
                               trend_up ? "true" : "false",
                               DoubleToString(g_tfs[0].state.ema150_value, _Digits),
                               DoubleToString(g_tfs[0].state.ema200_value, _Digits),
                               about_up ? "true" : "false",
+                              near_up ? "true" : "false",
+                              bar0_cross_up ? "true" : "false",
                               DoubleToString(g_tfs[0].state.ema13_value, _Digits),
                               DoubleToString(g_tfs[0].state.ema34_value, _Digits),
                               DoubleToString(diff, _Digits),
@@ -949,15 +977,19 @@ bool ShouldOpenSellOptionV1(int osma_sell, int ema_sell, bool strong_sell)
      }
 
    bool trend_down = IsM1TrendDownOptionV1();
-   bool about_down = IsM1AboutToCrossDownTickSideOptionV1();
+   bool near_down = IsM1NearCrossDownTickSideOptionV1();
+   bool bar0_cross_down = IsM1Bar0CrossedEma34DownOptionV1();
+   bool about_down = near_down && bar0_cross_down;
    bool allowed = EntryAllowedOptionV1(-1);
    bool result = trend_down && about_down && allowed;
    double diff = g_tfs[0].state.ema13_value - g_tfs[0].state.ema34_value;
-   LogWithPrices(StringFormat("[ENTRY-EVAL][OPTIONV1] side=SELL trend(150<200)=%s ema150=%s ema200=%s aboutCrossDown=%s ema13=%s ema34=%s diff=%s nearPts=%.1f filters=%s result=%s liveBarTime=%s tickTime=%s emaShift=0",
+   LogWithPrices(StringFormat("[ENTRY-EVAL][OPTIONV1] side=SELL trend(150<200)=%s ema150=%s ema200=%s aboutCrossDown=%s nearDown=%s bar0Cross34=%s ema13=%s ema34=%s diff=%s nearPts=%.1f filters=%s result=%s liveBarTime=%s tickTime=%s emaShift=0",
                               trend_down ? "true" : "false",
                               DoubleToString(g_tfs[0].state.ema150_value, _Digits),
                               DoubleToString(g_tfs[0].state.ema200_value, _Digits),
                               about_down ? "true" : "false",
+                              near_down ? "true" : "false",
+                              bar0_cross_down ? "true" : "false",
                               DoubleToString(g_tfs[0].state.ema13_value, _Digits),
                               DoubleToString(g_tfs[0].state.ema34_value, _Digits),
                               DoubleToString(diff, _Digits),
