@@ -109,6 +109,8 @@ struct TfState
    int bars_after_cross_1334;
    int bars_after_cross_150200;
 
+   double sma2_value;
+   double sma5_value;
    double ema150_value;
    double ema200_value;
    double ema13_value;
@@ -815,6 +817,27 @@ bool ShouldOpenSellBase(int osma_sell, int ema_sell, bool strong_sell)
 
 TrendDirection GetM1TrendOptionV1()
   {
+   bool fast_all_above_both = (g_tfs[0].state.sma2_value > g_tfs[0].state.ema150_value &&
+                               g_tfs[0].state.sma2_value > g_tfs[0].state.ema200_value &&
+                               g_tfs[0].state.sma5_value > g_tfs[0].state.ema150_value &&
+                               g_tfs[0].state.sma5_value > g_tfs[0].state.ema200_value &&
+                               g_tfs[0].state.ema13_value > g_tfs[0].state.ema150_value &&
+                               g_tfs[0].state.ema13_value > g_tfs[0].state.ema200_value &&
+                               g_tfs[0].state.ema34_value > g_tfs[0].state.ema150_value &&
+                               g_tfs[0].state.ema34_value > g_tfs[0].state.ema200_value);
+
+   bool fast_all_below_both = (g_tfs[0].state.sma2_value < g_tfs[0].state.ema150_value &&
+                               g_tfs[0].state.sma2_value < g_tfs[0].state.ema200_value &&
+                               g_tfs[0].state.sma5_value < g_tfs[0].state.ema150_value &&
+                               g_tfs[0].state.sma5_value < g_tfs[0].state.ema200_value &&
+                               g_tfs[0].state.ema13_value < g_tfs[0].state.ema150_value &&
+                               g_tfs[0].state.ema13_value < g_tfs[0].state.ema200_value &&
+                               g_tfs[0].state.ema34_value < g_tfs[0].state.ema150_value &&
+                               g_tfs[0].state.ema34_value < g_tfs[0].state.ema200_value);
+
+   if(fast_all_above_both) return TREND_UP;
+   if(fast_all_below_both) return TREND_DOWN;
+
    if(g_tfs[0].state.ema150_value > g_tfs[0].state.ema200_value) return TREND_UP;
    if(g_tfs[0].state.ema150_value < g_tfs[0].state.ema200_value) return TREND_DOWN;
    return TREND_FLAT;
@@ -824,6 +847,12 @@ bool RefreshM1LiveOptionV1MAs()
   {
    double v[];
    ArrayResize(v, 1);
+
+   if(CopyBuffer(g_tfs[0].ma_handles[MA_SMA2], 0, 0, 1, v) != 1) return false;
+   g_tfs[0].state.sma2_value = v[0];
+
+   if(CopyBuffer(g_tfs[0].ma_handles[MA_SMA5], 0, 0, 1, v) != 1) return false;
+   g_tfs[0].state.sma5_value = v[0];
 
    if(CopyBuffer(g_tfs[0].ma_handles[MA_EMA150], 0, 0, 1, v) != 1) return false;
    g_tfs[0].state.ema150_value = v[0];
@@ -944,16 +973,27 @@ bool ShouldOpenBuyOptionV1(int osma_buy, int ema_buy, bool strong_buy)
      }
 
    bool trend_up = IsM1TrendUpOptionV1();
+   bool fast_switch_up = (g_tfs[0].state.sma2_value > g_tfs[0].state.ema150_value &&
+                          g_tfs[0].state.sma2_value > g_tfs[0].state.ema200_value &&
+                          g_tfs[0].state.sma5_value > g_tfs[0].state.ema150_value &&
+                          g_tfs[0].state.sma5_value > g_tfs[0].state.ema200_value &&
+                          g_tfs[0].state.ema13_value > g_tfs[0].state.ema150_value &&
+                          g_tfs[0].state.ema13_value > g_tfs[0].state.ema200_value &&
+                          g_tfs[0].state.ema34_value > g_tfs[0].state.ema150_value &&
+                          g_tfs[0].state.ema34_value > g_tfs[0].state.ema200_value);
    bool near_up = IsM1NearCrossUpTickSideOptionV1();
    bool bar0_cross_up = IsM1Bar0CrossedEma34UpOptionV1();
    bool about_up = near_up && bar0_cross_up;
    bool allowed = EntryAllowedOptionV1(1);
    bool result = trend_up && about_up && allowed;
    double diff = g_tfs[0].state.ema13_value - g_tfs[0].state.ema34_value;
-   LogWithPrices(StringFormat("[ENTRY-EVAL][OPTIONV1] side=BUY trend(150>200)=%s ema150=%s ema200=%s aboutCrossUp=%s nearUp=%s bar0Cross34=%s ema13=%s ema34=%s diff=%s nearPts=%.1f filters=%s result=%s liveBarTime=%s tickTime=%s emaShift=0",
+   LogWithPrices(StringFormat("[ENTRY-EVAL][OPTIONV1] side=BUY trendUp=%s fastSwitchUp=%s ema150=%s ema200=%s sma2=%s sma5=%s aboutCrossUp=%s nearUp=%s bar0Cross34=%s ema13=%s ema34=%s diff=%s nearPts=%.1f filters=%s result=%s liveBarTime=%s tickTime=%s emaShift=0",
                               trend_up ? "true" : "false",
+                              fast_switch_up ? "true" : "false",
                               DoubleToString(g_tfs[0].state.ema150_value, _Digits),
                               DoubleToString(g_tfs[0].state.ema200_value, _Digits),
+                              DoubleToString(g_tfs[0].state.sma2_value, _Digits),
+                              DoubleToString(g_tfs[0].state.sma5_value, _Digits),
                               about_up ? "true" : "false",
                               near_up ? "true" : "false",
                               bar0_cross_up ? "true" : "false",
@@ -977,16 +1017,27 @@ bool ShouldOpenSellOptionV1(int osma_sell, int ema_sell, bool strong_sell)
      }
 
    bool trend_down = IsM1TrendDownOptionV1();
+   bool fast_switch_down = (g_tfs[0].state.sma2_value < g_tfs[0].state.ema150_value &&
+                            g_tfs[0].state.sma2_value < g_tfs[0].state.ema200_value &&
+                            g_tfs[0].state.sma5_value < g_tfs[0].state.ema150_value &&
+                            g_tfs[0].state.sma5_value < g_tfs[0].state.ema200_value &&
+                            g_tfs[0].state.ema13_value < g_tfs[0].state.ema150_value &&
+                            g_tfs[0].state.ema13_value < g_tfs[0].state.ema200_value &&
+                            g_tfs[0].state.ema34_value < g_tfs[0].state.ema150_value &&
+                            g_tfs[0].state.ema34_value < g_tfs[0].state.ema200_value);
    bool near_down = IsM1NearCrossDownTickSideOptionV1();
    bool bar0_cross_down = IsM1Bar0CrossedEma34DownOptionV1();
    bool about_down = near_down && bar0_cross_down;
    bool allowed = EntryAllowedOptionV1(-1);
    bool result = trend_down && about_down && allowed;
    double diff = g_tfs[0].state.ema13_value - g_tfs[0].state.ema34_value;
-   LogWithPrices(StringFormat("[ENTRY-EVAL][OPTIONV1] side=SELL trend(150<200)=%s ema150=%s ema200=%s aboutCrossDown=%s nearDown=%s bar0Cross34=%s ema13=%s ema34=%s diff=%s nearPts=%.1f filters=%s result=%s liveBarTime=%s tickTime=%s emaShift=0",
+   LogWithPrices(StringFormat("[ENTRY-EVAL][OPTIONV1] side=SELL trendDown=%s fastSwitchDown=%s ema150=%s ema200=%s sma2=%s sma5=%s aboutCrossDown=%s nearDown=%s bar0Cross34=%s ema13=%s ema34=%s diff=%s nearPts=%.1f filters=%s result=%s liveBarTime=%s tickTime=%s emaShift=0",
                               trend_down ? "true" : "false",
+                              fast_switch_down ? "true" : "false",
                               DoubleToString(g_tfs[0].state.ema150_value, _Digits),
                               DoubleToString(g_tfs[0].state.ema200_value, _Digits),
+                              DoubleToString(g_tfs[0].state.sma2_value, _Digits),
+                              DoubleToString(g_tfs[0].state.sma5_value, _Digits),
                               about_down ? "true" : "false",
                               near_down ? "true" : "false",
                               bar0_cross_down ? "true" : "false",
@@ -1393,6 +1444,8 @@ bool UpdateTimeframe(int tf_idx)
    ComputeEma1334State(tf_idx, ma_vals);
    ComputeOsmaState(tf_idx, osma);
    ComputeBarStats(tf_idx, rates, atr_buf[1], ma_vals);
+   g_tfs[tf_idx].state.sma2_value = ma_vals[MA_SMA2][1];
+   g_tfs[tf_idx].state.sma5_value = ma_vals[MA_SMA5][1];
    g_tfs[tf_idx].state.ema150_value = ma_vals[MA_EMA150][1];
    g_tfs[tf_idx].state.ema200_value = ma_vals[MA_EMA200][1];
    g_tfs[tf_idx].state.ema13_value = ma_vals[MA_EMA13][1];
@@ -1423,6 +1476,8 @@ int OnInit()
       g_tfs[i].state.peak_bottom_reached_1334 = false;
       g_tfs[i].state.peak_bottom_type_1334 = "";
       g_tfs[i].state.bars.avg_height = 0.0;
+      g_tfs[i].state.sma2_value = 0.0;
+      g_tfs[i].state.sma5_value = 0.0;
       g_tfs[i].state.ema150_value = 0.0;
       g_tfs[i].state.ema200_value = 0.0;
       g_tfs[i].state.ema13_value = 0.0;
