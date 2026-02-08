@@ -37,3 +37,6 @@ InpV2AutoCloseOnGuardBreach=true||true||0||true||N
 InpV2UseDynamicLotCap=true||true||0||true||N
 InpV2MaxLotByEquity=.01||0.01||0.001000||0.100000||N
 InpOptionV1EntryOnFirstBarCloseAfterCross1334=true||true||0||true||N
+InpInitialSlMode=1||0||0||1||N
+InpExtremumFallbackAtrMult=1.2||1.2||0.120000||12.000000||N
+InpExtremumLookbackEvents=40||40||1||400||N

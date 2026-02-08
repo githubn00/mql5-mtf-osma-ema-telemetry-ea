@@ -31,6 +31,12 @@ enum StrategyMode
    STRAT_OPTION_V1 = 1
   };
 
+enum InitialSlMode
+  {
+   SL_ATR = 0,
+   SL_EXTREMUM = 1
+  };
+
 enum MaId
   {
    MA_EMA150 = 0,
@@ -187,6 +193,9 @@ input bool InpV2AutoCloseOnGuardBreach = true;
 input bool InpV2UseDynamicLotCap = true;
 input double InpV2MaxLotByEquity = 0.01;
 input bool InpOptionV1EntryOnFirstBarCloseAfterCross1334 = true;
+input InitialSlMode InpInitialSlMode = SL_EXTREMUM;
+input double InpExtremumFallbackAtrMult = 1.2;
+input int InpExtremumLookbackEvents = 40;
 
 CTrade g_trade;
 TfRuntime g_tfs[TF_COUNT];
@@ -219,6 +228,13 @@ bool g_v2_last_osma_pass = true;
 datetime g_v2_last_entry_bar_time = 0;
 int g_v2_last_entry_direction = 0;
 int g_v2_last_entry_bars_total = -1;
+string g_v2_last_sl_mode = "ATR";
+string g_v2_last_sl_source = "atr";
+string g_v2_last_sl_fallback_reason = "NONE";
+string g_v2_last_extremum_type = "";
+datetime g_v2_last_extremum_time = 0;
+double g_v2_last_extremum_price = 0.0;
+double g_v2_last_sl_price = 0.0;
 
 const ENUM_TIMEFRAMES TF_VALUES[TF_COUNT] = {PERIOD_M1, PERIOD_M5, PERIOD_M15, PERIOD_H1, PERIOD_H4, PERIOD_D1};
 const string TF_NAMES[TF_COUNT] = {"M1", "M5", "M15", "H1", "H4", "D1"};
@@ -272,6 +288,12 @@ string StrategyModeToString(StrategyMode mode)
   {
    if(mode == STRAT_OPTION_V1) return "OptionV1";
    return "Base";
+  }
+
+string InitialSlModeToString(InitialSlMode mode)
+  {
+   if(mode == SL_EXTREMUM) return "EXTREMUM";
+   return "ATR";
   }
 
 int SignOf(double v)
@@ -331,10 +353,47 @@ double NormalizePriceByTick(double price)
    return MathRound(price / tick) * tick;
   }
 
-double ComputeInitialSlPrice(int direction, double ref_price)
+bool FindM1CrossEventExtremumForDirection(int direction, double &ext_price, datetime &ext_time, string &ext_type)
+  {
+   ext_price = 0.0;
+   ext_time = 0;
+   ext_type = "";
+
+   int scanned = 0;
+   string pair1334 = MA_NAMES[MA_EMA13] + "_" + MA_NAMES[MA_EMA34];
+   for(int i = g_tfs[0].cross_count - 1; i >= 0; i--)
+     {
+      CrossEvent ev = g_tfs[0].cross_events[i];
+      if(ev.pair != pair1334)
+         continue;
+      if(scanned >= InpExtremumLookbackEvents)
+         break;
+      scanned++;
+      if(!ev.has_extremum)
+         continue;
+
+      if(direction > 0 && ev.extremum_type == "bottom")
+        {
+         ext_price = ev.extremum_price;
+         ext_time = ev.extremum_t;
+         ext_type = ev.extremum_type;
+         return true;
+        }
+      if(direction < 0 && ev.extremum_type == "peak")
+        {
+         ext_price = ev.extremum_price;
+         ext_time = ev.extremum_t;
+         ext_type = ev.extremum_type;
+         return true;
+        }
+     }
+   return false;
+  }
+
+double ComputeInitialSlPriceAtr(int direction, double ref_price, double atr_mult)
   {
    double atr = g_tfs[0].state.bars.atr;
-   double dist = atr * InpV2InitialSlAtrMult;
+   double dist = atr * atr_mult;
    if(dist <= 0.0)
       dist = 80.0 * _Point;
 
@@ -345,6 +404,106 @@ double ComputeInitialSlPrice(int direction, double ref_price)
    if(direction > 0)
       return NormalizePriceByTick(ref_price - dist);
    return NormalizePriceByTick(ref_price + dist);
+  }
+
+double ComputeInitialSlPriceExtremum(int direction, double ref_price, bool &used_extremum, string &reject_reason)
+  {
+   used_extremum = false;
+   reject_reason = "NONE";
+   double ext_price = 0.0;
+   datetime ext_time = 0;
+   string ext_type = "";
+   bool found = FindM1CrossEventExtremumForDirection(direction, ext_price, ext_time, ext_type);
+   if(!found)
+     {
+      reject_reason = "EXTREMUM_NOT_FOUND_1334";
+      return 0.0;
+     }
+
+   double min_dist = (double)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL) * _Point;
+   if(min_dist <= 0.0)
+      min_dist = _Point;
+
+   double sl = ext_price;
+   if(direction > 0)
+     {
+      if(sl >= ref_price)
+        {
+         reject_reason = "EXTREMUM_INVALID_STOPLEVEL";
+         return 0.0;
+        }
+      if((ref_price - sl) < min_dist)
+        {
+         reject_reason = "EXTREMUM_INVALID_STOPLEVEL";
+         return 0.0;
+        }
+      sl = NormalizePriceByTick(sl);
+      if(sl >= ref_price)
+        {
+         reject_reason = "EXTREMUM_INVALID_STOPLEVEL";
+         return 0.0;
+        }
+     }
+   else
+     {
+      if(sl <= ref_price)
+        {
+         reject_reason = "EXTREMUM_INVALID_STOPLEVEL";
+         return 0.0;
+        }
+      if((sl - ref_price) < min_dist)
+        {
+         reject_reason = "EXTREMUM_INVALID_STOPLEVEL";
+         return 0.0;
+        }
+      sl = NormalizePriceByTick(sl);
+      if(sl <= ref_price)
+        {
+         reject_reason = "EXTREMUM_INVALID_STOPLEVEL";
+         return 0.0;
+        }
+     }
+
+   used_extremum = true;
+   g_v2_last_extremum_type = ext_type;
+   g_v2_last_extremum_time = ext_time;
+   g_v2_last_extremum_price = ext_price;
+   return sl;
+  }
+
+double ComputeInitialSlPrice(int direction, double ref_price)
+  {
+   g_v2_last_sl_mode = InitialSlModeToString(InpInitialSlMode);
+   g_v2_last_sl_source = "atr";
+   g_v2_last_sl_fallback_reason = "NONE";
+   g_v2_last_extremum_type = "";
+   g_v2_last_extremum_time = 0;
+   g_v2_last_extremum_price = 0.0;
+
+   if(InpInitialSlMode == SL_EXTREMUM)
+     {
+      bool used_extremum = false;
+      string reject_reason = "NONE";
+      double sl_ext = ComputeInitialSlPriceExtremum(direction, ref_price, used_extremum, reject_reason);
+      if(used_extremum && sl_ext > 0.0)
+        {
+         g_v2_last_sl_source = "extremum";
+         g_v2_last_sl_price = sl_ext;
+         return sl_ext;
+        }
+
+      double fallback_mult = InpExtremumFallbackAtrMult > 0.0 ? InpExtremumFallbackAtrMult : InpV2InitialSlAtrMult;
+      double sl_fb = ComputeInitialSlPriceAtr(direction, ref_price, fallback_mult);
+      g_v2_last_sl_source = "fallback_atr";
+      g_v2_last_sl_fallback_reason = reject_reason;
+      g_v2_last_sl_price = sl_fb;
+      return sl_fb;
+     }
+
+   double sl = ComputeInitialSlPriceAtr(direction, ref_price, InpV2InitialSlAtrMult);
+   g_v2_last_sl_source = "atr";
+   g_v2_last_sl_price = sl;
+   return sl;
   }
 
 bool CountManagedPositions(int &count, double &floating_profit)
@@ -995,6 +1154,8 @@ bool PlaceEntry(int direction, string ent, string ext, string sig)
    double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
    double px = direction > 0 ? ask : bid;
    double sl = ComputeInitialSlPrice(direction, px);
+   double sl_dist_pts = MathAbs(px - sl) / _Point;
+   string ext_time_s = g_v2_last_extremum_time > 0 ? TimeToString(g_v2_last_extremum_time, TIME_DATE|TIME_MINUTES|TIME_SECONDS) : "0";
 
    double margin_req = 0.0;
    ENUM_ORDER_TYPE ot = direction > 0 ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
@@ -1014,16 +1175,21 @@ bool PlaceEntry(int direction, string ent, string ext, string sig)
    if(InpDryRun)
      {
       g_last_recommendation = (direction > 0 ? "BUY " : "SELL ") + comment;
-      LogWithPrices(StringFormat("[ENTRY-DRYRUN] side=%s mode=%s lot=%.2f sl=%s comment=%s",
-                                 side, StrategyModeToString(InpStrategyMode), lot, DoubleToString(sl, _Digits), comment));
+      LogWithPrices(StringFormat("[ENTRY-DRYRUN] side=%s mode=%s lot=%.2f sl=%s slMode=%s slSource=%s fallbackReason=%s slDistPts=%.1f extType=%s extPrice=%s extTime=%s comment=%s",
+                                 side, StrategyModeToString(InpStrategyMode), lot, DoubleToString(sl, _Digits),
+                                 g_v2_last_sl_mode, g_v2_last_sl_source, g_v2_last_sl_fallback_reason, sl_dist_pts,
+                                 g_v2_last_extremum_type, DoubleToString(g_v2_last_extremum_price, _Digits), ext_time_s, comment));
       return true;
      }
 
    if(direction > 0)
      {
       bool ok = g_trade.Buy(lot, _Symbol, 0.0, sl, 0.0, comment);
-      LogWithPrices(StringFormat("[ENTRY-SEND] side=%s mode=%s lot=%.2f sl=%s ok=%s retcode=%u comment=%s",
-                                 side, StrategyModeToString(InpStrategyMode), lot, DoubleToString(sl, _Digits), ok ? "true" : "false", g_trade.ResultRetcode(), comment));
+      LogWithPrices(StringFormat("[ENTRY-SEND] side=%s mode=%s lot=%.2f sl=%s slMode=%s slSource=%s fallbackReason=%s slDistPts=%.1f extType=%s extPrice=%s extTime=%s ok=%s retcode=%u comment=%s",
+                                 side, StrategyModeToString(InpStrategyMode), lot, DoubleToString(sl, _Digits),
+                                 g_v2_last_sl_mode, g_v2_last_sl_source, g_v2_last_sl_fallback_reason, sl_dist_pts,
+                                 g_v2_last_extremum_type, DoubleToString(g_v2_last_extremum_price, _Digits), ext_time_s,
+                                 ok ? "true" : "false", g_trade.ResultRetcode(), comment));
       if(ok)
         {
          g_v2_last_entry_bar_time = iTime(_Symbol, PERIOD_M1, 0);
@@ -1034,8 +1200,11 @@ bool PlaceEntry(int direction, string ent, string ext, string sig)
      }
 
    bool ok = g_trade.Sell(lot, _Symbol, 0.0, sl, 0.0, comment);
-   LogWithPrices(StringFormat("[ENTRY-SEND] side=%s mode=%s lot=%.2f sl=%s ok=%s retcode=%u comment=%s",
-                              side, StrategyModeToString(InpStrategyMode), lot, DoubleToString(sl, _Digits), ok ? "true" : "false", g_trade.ResultRetcode(), comment));
+   LogWithPrices(StringFormat("[ENTRY-SEND] side=%s mode=%s lot=%.2f sl=%s slMode=%s slSource=%s fallbackReason=%s slDistPts=%.1f extType=%s extPrice=%s extTime=%s ok=%s retcode=%u comment=%s",
+                              side, StrategyModeToString(InpStrategyMode), lot, DoubleToString(sl, _Digits),
+                              g_v2_last_sl_mode, g_v2_last_sl_source, g_v2_last_sl_fallback_reason, sl_dist_pts,
+                              g_v2_last_extremum_type, DoubleToString(g_v2_last_extremum_price, _Digits), ext_time_s,
+                              ok ? "true" : "false", g_trade.ResultRetcode(), comment));
    if(ok)
      {
       g_v2_last_entry_bar_time = iTime(_Symbol, PERIOD_M1, 0);
@@ -1488,7 +1657,10 @@ void WriteJsonState()
    json += "\"entryCooldownBarsM1\":" + IntegerToString(InpV2EntryCooldownBarsM1) + ",";
    json += "\"requireTrendConsensusM1M5\":" + BoolJson(InpV2RequireTrendConsensusM1M5) + ",";
    json += "\"requireOsmaAgreementM1\":" + BoolJson(InpV2RequireOsmaAgreementM1) + ",";
+    json += "\"initialSlMode\":\"" + InitialSlModeToString(InpInitialSlMode) + "\",";
    json += "\"initialSlAtrMult\":" + DoubleToString(InpV2InitialSlAtrMult, 2) + ",";
+   json += "\"extremumFallbackAtrMult\":" + DoubleToString(InpExtremumFallbackAtrMult, 2) + ",";
+   json += "\"extremumLookbackEvents\":" + IntegerToString(InpExtremumLookbackEvents) + ",";
    json += "\"timeStopBarsM1\":" + IntegerToString(InpV2TimeStopBarsM1) + ",";
    json += "\"autoCloseOnGuardBreach\":" + BoolJson(InpV2AutoCloseOnGuardBreach) + ",";
    json += "\"useDynamicLotCap\":" + BoolJson(InpV2UseDynamicLotCap) + ",";
@@ -1643,6 +1815,15 @@ void WriteJsonState()
    json += "\"trendConsensusPass\":" + BoolJson(g_v2_last_trend_consensus_pass) + ",";
    json += "\"osmaPass\":" + BoolJson(g_v2_last_osma_pass) + ",";
    json += "\"blockReason\":\"" + JsonEscape(g_v2_entry_block_reason) + "\",";
+   json += "\"lastSlMode\":\"" + JsonEscape(g_v2_last_sl_mode) + "\",";
+   json += "\"lastSlSource\":\"" + JsonEscape(g_v2_last_sl_source) + "\",";
+   json += "\"lastSlFallbackReason\":\"" + JsonEscape(g_v2_last_sl_fallback_reason) + "\",";
+   json += "\"lastSlPrice\":" + DoubleToString(g_v2_last_sl_price, _Digits) + ",";
+   json += "\"lastExtremum\":{";
+   json += "\"type\":\"" + JsonEscape(g_v2_last_extremum_type) + "\",";
+   json += "\"time\":" + TimeToJson(g_v2_last_extremum_time) + ",";
+   json += "\"price\":" + DoubleToString(g_v2_last_extremum_price, _Digits);
+   json += "},";
    json += "\"lastEntryBarTime\":" + TimeToJson(g_v2_last_entry_bar_time) + ",";
    json += "\"lastEntryDirection\":" + IntegerToString(g_v2_last_entry_direction);
    json += "},";
