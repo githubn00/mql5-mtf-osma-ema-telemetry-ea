@@ -124,6 +124,7 @@ struct TfRuntime
 
    int last_cross_bars_total[MA_COUNT][MA_COUNT];
    datetime last_cross_time[MA_COUNT][MA_COUNT];
+   int last_nonzero_sign[MA_COUNT][MA_COUNT];
 
    CrossEvent cross_events[MAX_CROSS_EVENTS];
    int cross_count;
@@ -412,13 +413,20 @@ void DetectCrosses(int tf_idx, const double &ma_vals[][8], const MqlRates &rates
          if(!IsTrackedCrossPair(a, b))
             continue;
 
-         double prev_diff = ma_vals[a][2] - ma_vals[b][2];
          double curr_diff = ma_vals[a][1] - ma_vals[b][1];
-
-         int prev_sign = SignOf(prev_diff);
          int curr_sign = SignOf(curr_diff);
+         int prev_sign = g_tfs[tf_idx].last_nonzero_sign[a][b];
 
-         if(prev_sign == 0 || curr_sign == 0 || prev_sign == curr_sign)
+         if(curr_sign == 0)
+            continue;
+
+         if(prev_sign == 0)
+           {
+            g_tfs[tf_idx].last_nonzero_sign[a][b] = curr_sign;
+            continue;
+           }
+
+         if(prev_sign == curr_sign)
             continue;
 
          CrossEvent ev;
@@ -439,6 +447,7 @@ void DetectCrosses(int tf_idx, const double &ma_vals[][8], const MqlRates &rates
 
          g_tfs[tf_idx].last_cross_bars_total[a][b] = bars_total;
          g_tfs[tf_idx].last_cross_time[a][b] = ev.t;
+         g_tfs[tf_idx].last_nonzero_sign[a][b] = curr_sign;
 
          AddCrossEvent(tf_idx, ev);
 
@@ -1465,6 +1474,7 @@ int OnInit()
            {
             g_tfs[i].last_cross_bars_total[a][b] = -1;
             g_tfs[i].last_cross_time[a][b] = 0;
+            g_tfs[i].last_nonzero_sign[a][b] = 0;
            }
         }
 
