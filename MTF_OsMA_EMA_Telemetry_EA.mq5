@@ -1,4 +1,4 @@
-// Last updated: 2026-02-09 00:02
+// Last updated: 2026-02-09 00:15
 #property strict
 #property description "Multi-timeframe EMA/SMA + OsMA telemetry EA with JSON state export"
 
@@ -158,6 +158,7 @@ struct ReassessEvent
 
 struct EventTableRow
   {
+   int index;
    string tf;
    string event;
    string pair;
@@ -1151,97 +1152,103 @@ void BuildUnifiedEventTable(EventTableRow &rows[])
 
    for(int i = 0; i < TF_COUNT; i++)
      {
-      CrossEvent ev;
-      OsmaEvent osma_ev;
-      bool found_cross = false;
-      bool found_osma = false;
-
-      // Row 1: EMA13/EMA34 latest
-      ArrayResize(rows, row_count + 1);
-      rows[row_count].tf = g_tfs[i].tf_name;
-      rows[row_count].pair = pair1334;
-      rows[row_count].event = "none";
-      rows[row_count].t = 0;
-      rows[row_count].value = 0.0;
-      rows[row_count].direction = 0;
-      rows[row_count].bars_since_prev = -1;
-      rows[row_count].has_extremum = false;
-      rows[row_count].extremum_type = "";
-      rows[row_count].extremum_t = 0;
-      rows[row_count].extremum_price = 0.0;
-      rows[row_count].phase = PhaseToString(g_tfs[i].state.phase);
-      found_cross = LastCrossByPair(i, pair1334, ev);
-      if(found_cross)
+      for(int history_index = 0; history_index <= 2; history_index++)
         {
-         rows[row_count].event = "cross";
-         rows[row_count].t = ev.t;
-         rows[row_count].value = ev.price;
-         rows[row_count].direction = ev.direction;
-         rows[row_count].bars_since_prev = ev.bars_since_prev;
-         rows[row_count].has_extremum = ev.has_extremum;
-         rows[row_count].extremum_type = ev.extremum_type;
-         rows[row_count].extremum_t = ev.extremum_t;
-         rows[row_count].extremum_price = ev.extremum_price;
-        }
-      row_count++;
+         CrossEvent ev;
+         OsmaEvent osma_ev;
+         bool found_cross = false;
+         bool found_osma = false;
 
-      // Row 2: EMA150/EMA200 latest
-      ArrayResize(rows, row_count + 1);
-      rows[row_count].tf = g_tfs[i].tf_name;
-      rows[row_count].pair = pair150200;
-      rows[row_count].event = "none";
-      rows[row_count].t = 0;
-      rows[row_count].value = 0.0;
-      rows[row_count].direction = 0;
-      rows[row_count].bars_since_prev = -1;
-      rows[row_count].has_extremum = false;
-      rows[row_count].extremum_type = "";
-      rows[row_count].extremum_t = 0;
-      rows[row_count].extremum_price = 0.0;
-      rows[row_count].phase = PhaseToString(g_tfs[i].state.phase);
-      found_cross = LastCrossByPair(i, pair150200, ev);
-      if(found_cross)
-        {
-         rows[row_count].event = "cross";
-         rows[row_count].t = ev.t;
-         rows[row_count].value = ev.price;
-         rows[row_count].direction = ev.direction;
-         rows[row_count].bars_since_prev = ev.bars_since_prev;
-         rows[row_count].has_extremum = ev.has_extremum;
-         rows[row_count].extremum_type = ev.extremum_type;
-         rows[row_count].extremum_t = ev.extremum_t;
-         rows[row_count].extremum_price = ev.extremum_price;
-        }
-      row_count++;
+         // EMA13/EMA34 row at index N
+         ArrayResize(rows, row_count + 1);
+         rows[row_count].index = history_index;
+         rows[row_count].tf = g_tfs[i].tf_name;
+         rows[row_count].pair = pair1334;
+         rows[row_count].event = "none";
+         rows[row_count].t = 0;
+         rows[row_count].value = 0.0;
+         rows[row_count].direction = 0;
+         rows[row_count].bars_since_prev = -1;
+         rows[row_count].has_extremum = false;
+         rows[row_count].extremum_type = "";
+         rows[row_count].extremum_t = 0;
+         rows[row_count].extremum_price = 0.0;
+         rows[row_count].phase = PhaseToString(g_tfs[i].state.phase);
+         found_cross = CrossByPairAtIndex(i, pair1334, history_index, ev);
+         if(found_cross)
+           {
+            rows[row_count].event = "cross";
+            rows[row_count].t = ev.t;
+            rows[row_count].value = ev.price;
+            rows[row_count].direction = ev.direction;
+            rows[row_count].bars_since_prev = ev.bars_since_prev;
+            rows[row_count].has_extremum = ev.has_extremum;
+            rows[row_count].extremum_type = ev.extremum_type;
+            rows[row_count].extremum_t = ev.extremum_t;
+            rows[row_count].extremum_price = ev.extremum_price;
+           }
+         row_count++;
 
-      // Row 3: OsMA(3,15) latest event
-      ArrayResize(rows, row_count + 1);
-      rows[row_count].tf = g_tfs[i].tf_name;
-      rows[row_count].pair = osma_pair;
-      rows[row_count].event = "none";
-      rows[row_count].t = 0;
-      rows[row_count].value = 0.0;
-      rows[row_count].direction = 0;
-      rows[row_count].bars_since_prev = -1;
-      rows[row_count].has_extremum = false;
-      rows[row_count].extremum_type = "";
-      rows[row_count].extremum_t = 0;
-      rows[row_count].extremum_price = 0.0;
-      rows[row_count].phase = PhaseToString(g_tfs[i].state.phase);
-      found_osma = LastOsmaEvent(i, osma_ev);
-      if(found_osma)
-        {
-         rows[row_count].event = osma_ev.event_type;
-         rows[row_count].t = osma_ev.t;
-         rows[row_count].value = osma_ev.value;
-         rows[row_count].direction = osma_ev.direction;
-         rows[row_count].bars_since_prev = osma_ev.bars_since_prev;
-         rows[row_count].has_extremum = osma_ev.has_extremum;
-         rows[row_count].extremum_type = osma_ev.extremum_type;
-         rows[row_count].extremum_t = osma_ev.extremum_t;
-         rows[row_count].extremum_price = osma_ev.extremum_price;
+         // EMA150/EMA200 row at index N
+         ArrayResize(rows, row_count + 1);
+         rows[row_count].index = history_index;
+         rows[row_count].tf = g_tfs[i].tf_name;
+         rows[row_count].pair = pair150200;
+         rows[row_count].event = "none";
+         rows[row_count].t = 0;
+         rows[row_count].value = 0.0;
+         rows[row_count].direction = 0;
+         rows[row_count].bars_since_prev = -1;
+         rows[row_count].has_extremum = false;
+         rows[row_count].extremum_type = "";
+         rows[row_count].extremum_t = 0;
+         rows[row_count].extremum_price = 0.0;
+         rows[row_count].phase = PhaseToString(g_tfs[i].state.phase);
+         found_cross = CrossByPairAtIndex(i, pair150200, history_index, ev);
+         if(found_cross)
+           {
+            rows[row_count].event = "cross";
+            rows[row_count].t = ev.t;
+            rows[row_count].value = ev.price;
+            rows[row_count].direction = ev.direction;
+            rows[row_count].bars_since_prev = ev.bars_since_prev;
+            rows[row_count].has_extremum = ev.has_extremum;
+            rows[row_count].extremum_type = ev.extremum_type;
+            rows[row_count].extremum_t = ev.extremum_t;
+            rows[row_count].extremum_price = ev.extremum_price;
+           }
+         row_count++;
+
+         // OsMA(3,15) zero-cross row at index N
+         ArrayResize(rows, row_count + 1);
+         rows[row_count].index = history_index;
+         rows[row_count].tf = g_tfs[i].tf_name;
+         rows[row_count].pair = osma_pair;
+         rows[row_count].event = "none";
+         rows[row_count].t = 0;
+         rows[row_count].value = 0.0;
+         rows[row_count].direction = 0;
+         rows[row_count].bars_since_prev = -1;
+         rows[row_count].has_extremum = false;
+         rows[row_count].extremum_type = "";
+         rows[row_count].extremum_t = 0;
+         rows[row_count].extremum_price = 0.0;
+         rows[row_count].phase = PhaseToString(g_tfs[i].state.phase);
+         found_osma = OsmaZeroCrossAtIndex(i, history_index, osma_ev);
+         if(found_osma)
+           {
+            rows[row_count].event = osma_ev.event_type;
+            rows[row_count].t = osma_ev.t;
+            rows[row_count].value = osma_ev.value;
+            rows[row_count].direction = osma_ev.direction;
+            rows[row_count].bars_since_prev = osma_ev.bars_since_prev;
+            rows[row_count].has_extremum = osma_ev.has_extremum;
+            rows[row_count].extremum_type = osma_ev.extremum_type;
+            rows[row_count].extremum_t = osma_ev.extremum_t;
+            rows[row_count].extremum_price = osma_ev.extremum_price;
+           }
+         row_count++;
         }
-      row_count++;
      }
   }
 
@@ -1282,6 +1289,23 @@ bool LastCrossByPair(int tf_idx, string pair, CrossEvent &ev)
    return false;
   }
 
+bool CrossByPairAtIndex(int tf_idx, string pair, int history_index, CrossEvent &ev)
+  {
+   int seen = 0;
+   for(int i = g_tfs[tf_idx].cross_count - 1; i >= 0; i--)
+     {
+      if(g_tfs[tf_idx].cross_events[i].pair != pair)
+         continue;
+      if(seen == history_index)
+        {
+         ev = g_tfs[tf_idx].cross_events[i];
+         return true;
+        }
+      seen++;
+     }
+   return false;
+  }
+
 bool LastOsmaZeroCross(int tf_idx, OsmaEvent &ev)
   {
    for(int i = g_tfs[tf_idx].osma_count - 1; i >= 0; i--)
@@ -1290,6 +1314,23 @@ bool LastOsmaZeroCross(int tf_idx, OsmaEvent &ev)
          continue;
       ev = g_tfs[tf_idx].osma_events[i];
       return true;
+     }
+   return false;
+  }
+
+bool OsmaZeroCrossAtIndex(int tf_idx, int history_index, OsmaEvent &ev)
+  {
+   int seen = 0;
+   for(int i = g_tfs[tf_idx].osma_count - 1; i >= 0; i--)
+     {
+      if(g_tfs[tf_idx].osma_events[i].event_type != "zero_cross")
+         continue;
+      if(seen == history_index)
+        {
+         ev = g_tfs[tf_idx].osma_events[i];
+         return true;
+        }
+      seen++;
      }
    return false;
   }
