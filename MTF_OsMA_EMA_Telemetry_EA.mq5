@@ -1,4 +1,4 @@
-
+// Last updated: 2026-02-08 20:55
 #property strict
 #property description "Multi-timeframe EMA/SMA + OsMA telemetry EA with JSON state export"
 
@@ -415,19 +415,23 @@ void DetectCrosses(int tf_idx, const double &ma_vals[][8], const MqlRates &rates
             continue;
 
          double curr_diff = ma_vals[a][1] - ma_vals[b][1];
+         double prev_diff = ma_vals[a][2] - ma_vals[b][2];
          int curr_sign = SignOf(curr_diff);
+         int prev_sign = SignOf(prev_diff);
 
          if(curr_sign == 0)
             continue;
 
-         if(!g_tfs[tf_idx].last_sign_initialized[a][b])
+         if(prev_sign == 0)
            {
-            g_tfs[tf_idx].last_nonzero_sign[a][b] = curr_sign;
-            g_tfs[tf_idx].last_sign_initialized[a][b] = true;
-            continue;
+            for(int s = 3; s < 8; s++)
+              {
+               prev_sign = SignOf(ma_vals[a][s] - ma_vals[b][s]);
+               if(prev_sign != 0)
+                  break;
+              }
            }
-         
-         int prev_sign = g_tfs[tf_idx].last_nonzero_sign[a][b];
+
          if(prev_sign == 0)
            {
             g_tfs[tf_idx].last_nonzero_sign[a][b] = curr_sign;
@@ -439,6 +443,9 @@ void DetectCrosses(int tf_idx, const double &ma_vals[][8], const MqlRates &rates
             g_tfs[tf_idx].last_nonzero_sign[a][b] = curr_sign;
             continue;
            }
+
+         if(g_tfs[tf_idx].last_cross_time[a][b] == rates[1].time)
+            continue;
 
          CrossEvent ev;
          ev.pair = PairName(a, b);
