@@ -1,4 +1,4 @@
-// Last updated: 2026-02-08 23:05
+// Last updated: 2026-02-08 23:20
 #property strict
 #property description "Multi-timeframe EMA/SMA + OsMA telemetry EA with JSON state export"
 
@@ -59,7 +59,14 @@ struct OsmaEvent
    string event_type;
    datetime t;
    double value;
+   double price;
+   int bars_since_prev;
    int direction;
+   bool has_extremum;
+   string extremum_type;
+   datetime extremum_t;
+   double extremum_value;
+   double extremum_price;
   };
 
 struct BarStats
@@ -127,6 +134,7 @@ struct TfRuntime
    int last_nonzero_sign[MA_COUNT][MA_COUNT];
    bool last_sign_initialized[MA_COUNT][MA_COUNT];
    datetime last_live_cross_bar_time[MA_COUNT][MA_COUNT];
+   int last_osma_cross_bars_total;
 
    CrossEvent cross_events[MAX_CROSS_EVENTS];
    int cross_count;
@@ -296,6 +304,73 @@ void AddOsmaEvent(int tf_idx, const OsmaEvent &ev)
       g_tfs[tf_idx].osma_events[i - 1] = g_tfs[tf_idx].osma_events[i];
 
    g_tfs[tf_idx].osma_events[MAX_OSMA_EVENTS - 1] = ev;
+  }
+
+int FindLatestOsmaZeroCrossIndex(int tf_idx)
+  {
+   for(int i = g_tfs[tf_idx].osma_count - 1; i >= 0; i--)
+     {
+      if(g_tfs[tf_idx].osma_events[i].event_type == "zero_cross")
+         return i;
+     }
+   return -1;
+  }
+
+void UpdateLatestOsmaExtremumWithCandidate(int tf_idx, datetime t, double osma_value, double price)
+  {
+   int idx = FindLatestOsmaZeroCrossIndex(tf_idx);
+   if(idx < 0)
+      return;
+
+   bool want_peak = (g_tfs[tf_idx].osma_events[idx].direction > 0);
+   string ext_type = want_peak ? "peak" : "bottom";
+
+   bool replace = false;
+   if(!g_tfs[tf_idx].osma_events[idx].has_extremum)
+      replace = true;
+   else if(g_tfs[tf_idx].osma_events[idx].extremum_type != ext_type)
+      replace = true;
+   else if(want_peak && osma_value > g_tfs[tf_idx].osma_events[idx].extremum_value)
+      replace = true;
+   else if(!want_peak && osma_value < g_tfs[tf_idx].osma_events[idx].extremum_value)
+      replace = true;
+
+   if(replace)
+     {
+      g_tfs[tf_idx].osma_events[idx].has_extremum = true;
+      g_tfs[tf_idx].osma_events[idx].extremum_type = ext_type;
+      g_tfs[tf_idx].osma_events[idx].extremum_t = t;
+      g_tfs[tf_idx].osma_events[idx].extremum_value = osma_value;
+      g_tfs[tf_idx].osma_events[idx].extremum_price = price;
+     }
+  }
+
+void RegisterOsmaZeroCross(int tf_idx, int direction, datetime t, double osma_value, double close_price, int bars_total)
+  {
+   OsmaEvent ev;
+   ev.event_type = "zero_cross";
+   ev.t = t;
+   ev.value = osma_value;
+   ev.price = close_price;
+   ev.direction = direction;
+   ev.has_extremum = false;
+   ev.extremum_type = "";
+   ev.extremum_t = 0;
+   ev.extremum_value = 0.0;
+   ev.extremum_price = 0.0;
+
+   if(g_tfs[tf_idx].last_osma_cross_bars_total > 0)
+      ev.bars_since_prev = MathAbs(bars_total - g_tfs[tf_idx].last_osma_cross_bars_total);
+   else
+      ev.bars_since_prev = -1;
+
+   g_tfs[tf_idx].last_osma_cross_bars_total = bars_total;
+   AddOsmaEvent(tf_idx, ev);
+
+   if(direction > 0)
+      g_tfs[tf_idx].state.osma_just_cross_up = true;
+   else
+      g_tfs[tf_idx].state.osma_just_cross_down = true;
   }
 
 void TrackD1Cross150200(const CrossEvent &ev)
@@ -516,6 +591,82 @@ void BackfillLatestCrossForPair(int tf_idx, int a, int b, const double &left[], 
       g_tfs[tf_idx].state.bars_after_cross_150200 = MathMax(0, cross_shift - 1);
   }
 
+bool FindLatestOsmaCrossShift(const double &osma[], int from_shift, int max_shift, int &cross_shift, int &direction)
+  {
+   cross_shift = -1;
+   direction = 0;
+
+   int size = ArraySize(osma);
+   int limit = MathMin(max_shift, size - 2);
+   if(limit < from_shift)
+      return false;
+
+   for(int s = from_shift; s <= limit; s++)
+     {
+      int curr_sign = SignOf(osma[s]);
+      if(curr_sign == 0)
+         continue;
+
+      int prev_sign = SignOf(osma[s + 1]);
+      if(prev_sign == 0)
+        {
+         for(int z = s + 2; z <= limit + 1; z++)
+           {
+            prev_sign = SignOf(osma[z]);
+            if(prev_sign != 0)
+               break;
+           }
+        }
+
+      if(prev_sign == 0 || prev_sign == curr_sign)
+         continue;
+
+      cross_shift = s;
+      direction = curr_sign;
+      return true;
+     }
+
+   return false;
+  }
+
+void BackfillLatestOsmaZeroCross(int tf_idx, const double &osma[], const MqlRates &rates[], int bars_total)
+  {
+   if(FindLatestOsmaZeroCrossIndex(tf_idx) >= 0)
+      return;
+
+   int rates_size = ArraySize(rates);
+   if(rates_size < 4)
+      return;
+
+   int max_shift = rates_size - 2;
+   int cross_shift = -1;
+   int direction = 0;
+   if(!FindLatestOsmaCrossShift(osma, 1, max_shift, cross_shift, direction))
+      return;
+
+   RegisterOsmaZeroCross(tf_idx, direction, rates[cross_shift].time, osma[cross_shift], rates[cross_shift].close, bars_total);
+
+   int idx = FindLatestOsmaZeroCrossIndex(tf_idx);
+   if(idx < 0)
+      return;
+
+   bool want_peak = (direction > 0);
+   int best_shift = cross_shift;
+   double best_value = osma[cross_shift];
+
+   for(int s = cross_shift - 1; s >= 1; s--)
+     {
+      double candidate = osma[s];
+      if((want_peak && candidate > best_value) || (!want_peak && candidate < best_value))
+        {
+         best_value = candidate;
+         best_shift = s;
+        }
+     }
+
+   UpdateLatestOsmaExtremumWithCandidate(tf_idx, rates[best_shift].time, osma[best_shift], rates[best_shift].close);
+  }
+
 bool BootstrapCrossEventsFromHistory(int tf_idx)
   {
    int need = MathMax(64, InpStartupCrossLookbackBars + 3);
@@ -538,6 +689,9 @@ bool BootstrapCrossEventsFromHistory(int tf_idx)
    if(!LoadBuffer(g_tfs[tf_idx].ma_handles[MA_EMA150], loaded, ema150))
       return false;
    if(!LoadBuffer(g_tfs[tf_idx].ma_handles[MA_EMA200], loaded, ema200))
+      return false;
+   double osma[];
+   if(!LoadBuffer(g_tfs[tf_idx].osma_handle, loaded, osma))
       return false;
 
    int bars_total = Bars(_Symbol, g_tfs[tf_idx].tf);
@@ -562,6 +716,7 @@ bool BootstrapCrossEventsFromHistory(int tf_idx)
 
    BackfillLatestCrossForPair(tf_idx, MA_EMA13, MA_EMA34, ema13, ema34, rates, bars_total);
    BackfillLatestCrossForPair(tf_idx, MA_EMA150, MA_EMA200, ema150, ema200, rates, bars_total);
+   BackfillLatestOsmaZeroCross(tf_idx, osma, rates, bars_total);
    return true;
   }
 
@@ -762,35 +917,27 @@ void DetectOsma(int tf_idx, const double &osma[], const MqlRates &rates[])
    g_tfs[tf_idx].state.osma_just_cross_up = false;
    g_tfs[tf_idx].state.osma_just_cross_down = false;
 
-   int prev_sign = SignOf(osma[2]);
    int curr_sign = SignOf(osma[1]);
+   int prev_sign = SignOf(osma[2]);
 
-   if(prev_sign != 0 && curr_sign != 0 && prev_sign != curr_sign)
+   if(curr_sign != 0 && prev_sign == 0)
      {
-      OsmaEvent ev;
-      ev.event_type = "zero_cross";
-      ev.t = rates[1].time;
-      ev.value = osma[1];
-      ev.direction = curr_sign;
-      AddOsmaEvent(tf_idx, ev);
-
-      if(curr_sign > 0)
-         g_tfs[tf_idx].state.osma_just_cross_up = true;
-      else
-         g_tfs[tf_idx].state.osma_just_cross_down = true;
+      for(int s = 3; s < 8; s++)
+        {
+         prev_sign = SignOf(osma[s]);
+         if(prev_sign != 0)
+            break;
+        }
      }
 
-   bool osma_peak = (osma[3] > osma[1] && osma[3] > osma[2] && osma[3] > osma[4] && osma[3] > osma[5]);
-   bool osma_bottom = (osma[3] < osma[1] && osma[3] < osma[2] && osma[3] < osma[4] && osma[3] < osma[5]);
+   int bars_total = Bars(_Symbol, g_tfs[tf_idx].tf);
+   if(curr_sign != 0 && prev_sign != 0 && prev_sign != curr_sign)
+      RegisterOsmaZeroCross(tf_idx, curr_sign, rates[1].time, osma[1], rates[1].close, bars_total);
 
-   if(osma_peak || osma_bottom)
+   int idx = FindLatestOsmaZeroCrossIndex(tf_idx);
+   if(idx >= 0 && rates[1].time >= g_tfs[tf_idx].osma_events[idx].t)
      {
-      OsmaEvent ex;
-      ex.event_type = osma_peak ? "peak" : "bottom";
-      ex.t = rates[3].time;
-      ex.value = osma[3];
-      ex.direction = SignOf(osma[3]);
-      AddOsmaEvent(tf_idx, ex);
+      UpdateLatestOsmaExtremumWithCandidate(tf_idx, rates[1].time, osma[1], rates[1].close);
      }
   }
 
@@ -1077,6 +1224,11 @@ void BuildUnifiedEventTable(EventTableRow &rows[])
          rows[row_count].t = osma_ev.t;
          rows[row_count].value = osma_ev.value;
          rows[row_count].direction = osma_ev.direction;
+         rows[row_count].bars_since_prev = osma_ev.bars_since_prev;
+         rows[row_count].has_extremum = osma_ev.has_extremum;
+         rows[row_count].extremum_type = osma_ev.extremum_type;
+         rows[row_count].extremum_t = osma_ev.extremum_t;
+         rows[row_count].extremum_price = osma_ev.extremum_price;
         }
       row_count++;
      }
@@ -1453,7 +1605,19 @@ string BuildOsmaEventJson(const OsmaEvent &ev)
    s += "\"type\":\"" + JsonEscape(ev.event_type) + "\",";
    s += "\"time\":" + TimeToJson(ev.t) + ",";
    s += "\"value\":" + DoubleToString(ev.value, 8) + ",";
+   s += "\"price\":" + DoubleToString(ev.price, _Digits) + ",";
+    s += "\"barsSincePrev\":" + IntegerToString(ev.bars_since_prev) + ",";
+   s += "\"hasExtremum\":" + BoolJson(ev.has_extremum) + ",";
    s += "\"direction\":" + IntegerToString(ev.direction);
+   if(ev.has_extremum)
+     {
+      s += ",\"extremum\":{";
+      s += "\"type\":\"" + JsonEscape(ev.extremum_type) + "\",";
+      s += "\"time\":" + TimeToJson(ev.extremum_t) + ",";
+      s += "\"value\":" + DoubleToString(ev.extremum_value, 8) + ",";
+      s += "\"price\":" + DoubleToString(ev.extremum_price, _Digits);
+      s += "}";
+     }
    s += "}";
    return s;
   }
@@ -1759,6 +1923,7 @@ int OnInit()
       g_tfs[i].atr_handle = INVALID_HANDLE;
       g_tfs[i].cross_count = 0;
       g_tfs[i].osma_count = 0;
+      g_tfs[i].last_osma_cross_bars_total = -1;
       g_tfs[i].last_bar_time = 0;
       g_tfs[i].state.direction = TREND_FLAT;
       g_tfs[i].state.previous_direction = TREND_FLAT;
