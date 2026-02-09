@@ -1,4 +1,4 @@
-// Last updated: 2026-02-08 21:44
+// Last updated: 2026-02-08 22:05
 #property strict
 #property description "Multi-timeframe EMA/SMA + OsMA telemetry EA with JSON state export"
 
@@ -181,6 +181,7 @@ input int InpOsmaFast = 12;
 input int InpOsmaSlow = 59;
 input bool InpPrintEventArraysEveryTick = true;
 input bool InpLiveCrossDetection = true;
+input int InpStartupCrossLookbackBars = 1000;
 
 CTrade g_trade;
 TfRuntime g_tfs[TF_COUNT];
@@ -332,6 +333,144 @@ bool IsTrackedCrossPair(int a, int b)
    if(a == MA_EMA150 && b == MA_EMA200)
       return true;
    return false;
+  }
+
+bool FindLatestClosedCrossShift(const double &left[], const double &right[], int from_shift, int max_shift, int &cross_shift, int &direction)
+  {
+   cross_shift = -1;
+   direction = 0;
+
+   int left_size = ArraySize(left);
+   int right_size = ArraySize(right);
+   int limit = MathMin(max_shift, MathMin(left_size, right_size) - 2);
+   if(limit < from_shift)
+      return false;
+
+   for(int s = from_shift; s <= limit; s++)
+     {
+      int curr_sign = SignOf(left[s] - right[s]);
+      if(curr_sign == 0)
+         continue;
+
+      int prev_sign = SignOf(left[s + 1] - right[s + 1]);
+      if(prev_sign == 0)
+        {
+         for(int z = s + 2; z <= limit + 1; z++)
+           {
+            prev_sign = SignOf(left[z] - right[z]);
+            if(prev_sign != 0)
+               break;
+           }
+        }
+
+      if(prev_sign == 0 || prev_sign == curr_sign)
+         continue;
+
+      cross_shift = s;
+      direction = curr_sign;
+      return true;
+     }
+
+   return false;
+  }
+
+void BackfillLatestCrossForPair(int tf_idx, int a, int b, const double &left[], const double &right[], const MqlRates &rates[], int bars_total)
+  {
+   int rates_size = ArraySize(rates);
+   if(rates_size < 4)
+      return;
+
+   int max_shift = rates_size - 2;
+   int cross_shift = -1;
+   int direction = 0;
+   if(!FindLatestClosedCrossShift(left, right, 1, max_shift, cross_shift, direction))
+      return;
+
+   CrossEvent ev;
+   ev.pair = PairName(a, b);
+   ev.t = rates[cross_shift].time;
+   ev.price = rates[cross_shift].close;
+   ev.direction = direction;
+   ev.has_extremum = false;
+   ev.extremum_type = "";
+   ev.extremum_t = 0;
+   ev.extremum_price = 0.0;
+
+   int prev_shift = -1;
+   int prev_direction = 0;
+   if(FindLatestClosedCrossShift(left, right, cross_shift + 1, max_shift, prev_shift, prev_direction))
+      ev.bars_since_prev = prev_shift - cross_shift;
+   else
+      ev.bars_since_prev = -1;
+
+   if(a == MA_EMA13 && b == MA_EMA34)
+     {
+      bool want_bottom = (direction > 0);
+      int best_shift = cross_shift;
+      double best_price = want_bottom ? rates[cross_shift].low : rates[cross_shift].high;
+
+      for(int s = cross_shift - 1; s >= 1; s--)
+        {
+         double candidate = want_bottom ? rates[s].low : rates[s].high;
+         if((want_bottom && candidate < best_price) || (!want_bottom && candidate > best_price))
+           {
+            best_price = candidate;
+            best_shift = s;
+           }
+        }
+
+      ev.has_extremum = true;
+      ev.extremum_type = want_bottom ? "bottom" : "peak";
+      ev.extremum_t = rates[best_shift].time;
+      ev.extremum_price = best_price;
+     }
+
+   AddCrossEvent(tf_idx, ev);
+   g_tfs[tf_idx].last_cross_time[a][b] = ev.t;
+   g_tfs[tf_idx].last_nonzero_sign[a][b] = ev.direction;
+   g_tfs[tf_idx].last_live_cross_bar_time[a][b] = 0;
+
+   if(bars_total > 0)
+      g_tfs[tf_idx].last_cross_bars_total[a][b] = bars_total - (cross_shift - 1);
+
+   if(a == MA_EMA13 && b == MA_EMA34)
+     {
+      g_tfs[tf_idx].state.bars_after_cross_1334 = MathMax(0, cross_shift - 1);
+      g_tfs[tf_idx].state.peak_bottom_reached_1334 = ev.has_extremum;
+      g_tfs[tf_idx].state.peak_bottom_type_1334 = ev.extremum_type;
+     }
+
+   if(a == MA_EMA150 && b == MA_EMA200)
+      g_tfs[tf_idx].state.bars_after_cross_150200 = MathMax(0, cross_shift - 1);
+  }
+
+void BootstrapCrossEventsFromHistory(int tf_idx)
+  {
+   int need = MathMax(64, InpStartupCrossLookbackBars + 3);
+   MqlRates rates[];
+   if(!LoadRates(g_tfs[tf_idx].tf, need, rates))
+      return;
+
+   int loaded = ArraySize(rates);
+   if(loaded < 8)
+      return;
+
+   double ema13[];
+   double ema34[];
+   double ema150[];
+   double ema200[];
+   if(!LoadBuffer(g_tfs[tf_idx].ma_handles[MA_EMA13], loaded, ema13))
+      return;
+   if(!LoadBuffer(g_tfs[tf_idx].ma_handles[MA_EMA34], loaded, ema34))
+      return;
+   if(!LoadBuffer(g_tfs[tf_idx].ma_handles[MA_EMA150], loaded, ema150))
+      return;
+   if(!LoadBuffer(g_tfs[tf_idx].ma_handles[MA_EMA200], loaded, ema200))
+      return;
+
+   int bars_total = Bars(_Symbol, g_tfs[tf_idx].tf);
+   BackfillLatestCrossForPair(tf_idx, MA_EMA13, MA_EMA34, ema13, ema34, rates, bars_total);
+   BackfillLatestCrossForPair(tf_idx, MA_EMA150, MA_EMA200, ema150, ema200, rates, bars_total);
   }
 
 void RegisterCrossEvent(int tf_idx, int a, int b, int direction, datetime t, double price, int bars_total)
@@ -956,13 +1095,30 @@ string BuildUnclosedEventLine(int tf_idx)
    string s = g_tfs[tf_idx].tf_name + " | ";
 
    if(has150200)
-      s += "150/200 " + EventDirectionToString(ev150200.direction) + " age=" + IntegerToString(g_tfs[tf_idx].state.bars_after_cross_150200);
+     {
+      s += "150/200 " + EventDirectionToString(ev150200.direction);
+      s += " t=" + TimeToString(ev150200.t, TIME_DATE | TIME_MINUTES);
+      s += " p=" + DoubleToString(ev150200.price, _Digits);
+      s += " age=" + IntegerToString(g_tfs[tf_idx].state.bars_after_cross_150200);
+     }
    else
       s += "150/200 none";
 
    s += " | ";
    if(has1334)
-      s += "13/34 " + EventDirectionToString(ev1334.direction) + " age=" + IntegerToString(g_tfs[tf_idx].state.bars_after_cross_1334) + " phase=" + PhaseToString(g_tfs[tf_idx].state.phase);
+     {
+      s += "13/34 " + EventDirectionToString(ev1334.direction);
+      s += " t=" + TimeToString(ev1334.t, TIME_DATE | TIME_MINUTES);
+      s += " p=" + DoubleToString(ev1334.price, _Digits);
+      s += " age=" + IntegerToString(g_tfs[tf_idx].state.bars_after_cross_1334);
+      s += " phase=" + PhaseToString(g_tfs[tf_idx].state.phase);
+      if(ev1334.has_extremum)
+        {
+         s += " ext=" + ev1334.extremum_type;
+         s += "@" + TimeToString(ev1334.extremum_t, TIME_DATE | TIME_MINUTES);
+         s += "/" + DoubleToString(ev1334.extremum_price, _Digits);
+        }
+     }
    else
       s += "13/34 none";
 
@@ -1572,6 +1728,8 @@ int OnInit()
          Print("Failed iATR handle tf=", g_tfs[i].tf_name, " err=", GetLastError());
          return INIT_FAILED;
         }
+
+      BootstrapCrossEventsFromHistory(i);
      }
 
    return INIT_SUCCEEDED;
