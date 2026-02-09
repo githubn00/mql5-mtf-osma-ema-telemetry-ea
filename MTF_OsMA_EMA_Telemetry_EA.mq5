@@ -1,4 +1,4 @@
-// Last updated: 2026-02-08 21:20
+// Last updated: 2026-02-08 21:44
 #property strict
 #property description "Multi-timeframe EMA/SMA + OsMA telemetry EA with JSON state export"
 
@@ -428,7 +428,8 @@ void UpdateCrossExtremums(int tf_idx, const MqlRates &rates[])
    // Up-cross -> bottom (lowest low), Down-cross -> peak (highest high).
    string pair1334 = PairName(MA_EMA13, MA_EMA34);
    int idx1334 = FindLatestCrossIndexByPair(tf_idx, pair1334);
-   if(idx1334 >= 0 && rates[1].time > g_tfs[tf_idx].cross_events[idx1334].t)
+   // Include the crossing bar itself so EMA13/34 extremum is anchored from event start.
+   if(idx1334 >= 0 && rates[1].time >= g_tfs[tf_idx].cross_events[idx1334].t)
      {
       bool want_bottom = (g_tfs[tf_idx].cross_events[idx1334].direction > 0);
       string ext_type = want_bottom ? "bottom" : "peak";
