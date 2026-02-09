@@ -1,4 +1,4 @@
-// Last updated: 2026-02-08 22:05
+// Last updated: 2026-02-08 23:05
 #property strict
 #property description "Multi-timeframe EMA/SMA + OsMA telemetry EA with JSON state export"
 
@@ -135,6 +135,7 @@ struct TfRuntime
    int osma_count;
 
    TfState state;
+   bool startup_backfill_ready;
   };
 
 struct ReassessEvent
@@ -252,6 +253,7 @@ bool LoadBuffer(int handle, int count, double &dst[])
   {
    ArrayResize(dst, count);
    ArrayInitialize(dst, 0.0);
+   ArraySetAsSeries(dst, true);
    int copied = CopyBuffer(handle, 0, 0, count, dst);
    return copied == count;
   }
@@ -335,6 +337,72 @@ bool IsTrackedCrossPair(int a, int b)
    return false;
   }
 
+int FindFirstNonZeroSign(const double &left[], const double &right[], int from_shift, int max_shift)
+  {
+   int left_size = ArraySize(left);
+   int right_size = ArraySize(right);
+   int limit = MathMin(max_shift, MathMin(left_size, right_size) - 1);
+   if(limit < from_shift)
+      return 0;
+
+   for(int s = from_shift; s <= limit; s++)
+     {
+      int sign = SignOf(left[s] - right[s]);
+      if(sign != 0)
+         return sign;
+     }
+
+   return 0;
+  }
+
+int FindFirstNonZeroSignMatrix(const double &ma_vals[][8], int a, int b, int from_shift, int max_shift)
+  {
+   int limit = MathMin(max_shift, 7);
+   if(limit < from_shift)
+      return 0;
+
+   for(int s = from_shift; s <= limit; s++)
+     {
+      int sign = SignOf(ma_vals[a][s] - ma_vals[b][s]);
+      if(sign != 0)
+         return sign;
+     }
+
+   return 0;
+  }
+
+void UpdateLatest1334ExtremumWithCandidate(int tf_idx, datetime cand_t, double cand_price)
+  {
+   string pair1334 = PairName(MA_EMA13, MA_EMA34);
+   int idx1334 = FindLatestCrossIndexByPair(tf_idx, pair1334);
+   if(idx1334 < 0)
+      return;
+
+   bool want_peak = (g_tfs[tf_idx].cross_events[idx1334].direction > 0);
+   string ext_type = want_peak ? "peak" : "bottom";
+
+   bool replace = false;
+   if(!g_tfs[tf_idx].cross_events[idx1334].has_extremum)
+      replace = true;
+   else if(g_tfs[tf_idx].cross_events[idx1334].extremum_type != ext_type)
+      replace = true;
+   else if(want_peak && cand_price > g_tfs[tf_idx].cross_events[idx1334].extremum_price)
+      replace = true;
+   else if(!want_peak && cand_price < g_tfs[tf_idx].cross_events[idx1334].extremum_price)
+      replace = true;
+
+   if(replace)
+     {
+      g_tfs[tf_idx].cross_events[idx1334].has_extremum = true;
+      g_tfs[tf_idx].cross_events[idx1334].extremum_type = ext_type;
+      g_tfs[tf_idx].cross_events[idx1334].extremum_t = cand_t;
+      g_tfs[tf_idx].cross_events[idx1334].extremum_price = cand_price;
+     }
+
+   g_tfs[tf_idx].state.peak_bottom_reached_1334 = g_tfs[tf_idx].cross_events[idx1334].has_extremum;
+   g_tfs[tf_idx].state.peak_bottom_type_1334 = g_tfs[tf_idx].cross_events[idx1334].extremum_type;
+  }
+
 bool FindLatestClosedCrossShift(const double &left[], const double &right[], int from_shift, int max_shift, int &cross_shift, int &direction)
   {
    cross_shift = -1;
@@ -376,6 +444,10 @@ bool FindLatestClosedCrossShift(const double &left[], const double &right[], int
 
 void BackfillLatestCrossForPair(int tf_idx, int a, int b, const double &left[], const double &right[], const MqlRates &rates[], int bars_total)
   {
+   string pair_name = PairName(a, b);
+   if(FindLatestCrossIndexByPair(tf_idx, pair_name) >= 0)
+      return;
+
    int rates_size = ArraySize(rates);
    if(rates_size < 4)
       return;
@@ -387,7 +459,7 @@ void BackfillLatestCrossForPair(int tf_idx, int a, int b, const double &left[], 
       return;
 
    CrossEvent ev;
-   ev.pair = PairName(a, b);
+   ev.pair = pair_name;
    ev.t = rates[cross_shift].time;
    ev.price = rates[cross_shift].close;
    ev.direction = direction;
@@ -405,14 +477,14 @@ void BackfillLatestCrossForPair(int tf_idx, int a, int b, const double &left[], 
 
    if(a == MA_EMA13 && b == MA_EMA34)
      {
-      bool want_bottom = (direction > 0);
+      bool want_peak = (direction > 0);
       int best_shift = cross_shift;
-      double best_price = want_bottom ? rates[cross_shift].low : rates[cross_shift].high;
+      double best_price = want_peak ? rates[cross_shift].high : rates[cross_shift].low;
 
       for(int s = cross_shift - 1; s >= 1; s--)
         {
-         double candidate = want_bottom ? rates[s].low : rates[s].high;
-         if((want_bottom && candidate < best_price) || (!want_bottom && candidate > best_price))
+         double candidate = want_peak ? rates[s].high : rates[s].low;
+         if((want_peak && candidate > best_price) || (!want_peak && candidate < best_price))
            {
             best_price = candidate;
             best_shift = s;
@@ -420,7 +492,7 @@ void BackfillLatestCrossForPair(int tf_idx, int a, int b, const double &left[], 
         }
 
       ev.has_extremum = true;
-      ev.extremum_type = want_bottom ? "bottom" : "peak";
+      ev.extremum_type = want_peak ? "peak" : "bottom";
       ev.extremum_t = rates[best_shift].time;
       ev.extremum_price = best_price;
      }
@@ -444,33 +516,53 @@ void BackfillLatestCrossForPair(int tf_idx, int a, int b, const double &left[], 
       g_tfs[tf_idx].state.bars_after_cross_150200 = MathMax(0, cross_shift - 1);
   }
 
-void BootstrapCrossEventsFromHistory(int tf_idx)
+bool BootstrapCrossEventsFromHistory(int tf_idx)
   {
    int need = MathMax(64, InpStartupCrossLookbackBars + 3);
    MqlRates rates[];
    if(!LoadRates(g_tfs[tf_idx].tf, need, rates))
-      return;
+      return false;
 
    int loaded = ArraySize(rates);
    if(loaded < 8)
-      return;
+      return false;
 
    double ema13[];
    double ema34[];
    double ema150[];
    double ema200[];
    if(!LoadBuffer(g_tfs[tf_idx].ma_handles[MA_EMA13], loaded, ema13))
-      return;
+      return false;
    if(!LoadBuffer(g_tfs[tf_idx].ma_handles[MA_EMA34], loaded, ema34))
-      return;
+      return false;
    if(!LoadBuffer(g_tfs[tf_idx].ma_handles[MA_EMA150], loaded, ema150))
-      return;
+      return false;
    if(!LoadBuffer(g_tfs[tf_idx].ma_handles[MA_EMA200], loaded, ema200))
-      return;
+      return false;
 
    int bars_total = Bars(_Symbol, g_tfs[tf_idx].tf);
+
+   // If bar0 already flipped vs previous non-zero sign, seed immediately on load.
+   int curr1334 = SignOf(ema13[0] - ema34[0]);
+   int prev1334 = FindFirstNonZeroSign(ema13, ema34, 1, loaded - 1);
+   if(curr1334 != 0 && prev1334 != 0 && curr1334 != prev1334 && FindLatestCrossIndexByPair(tf_idx, PairName(MA_EMA13, MA_EMA34)) < 0)
+     {
+      RegisterCrossEvent(tf_idx, MA_EMA13, MA_EMA34, curr1334, rates[0].time, rates[0].close, bars_total);
+      g_tfs[tf_idx].last_live_cross_bar_time[MA_EMA13][MA_EMA34] = rates[0].time;
+      UpdateLatest1334ExtremumWithCandidate(tf_idx, rates[0].time, curr1334 > 0 ? rates[0].high : rates[0].low);
+     }
+
+   int curr150200 = SignOf(ema150[0] - ema200[0]);
+   int prev150200 = FindFirstNonZeroSign(ema150, ema200, 1, loaded - 1);
+   if(curr150200 != 0 && prev150200 != 0 && curr150200 != prev150200 && FindLatestCrossIndexByPair(tf_idx, PairName(MA_EMA150, MA_EMA200)) < 0)
+     {
+      RegisterCrossEvent(tf_idx, MA_EMA150, MA_EMA200, curr150200, rates[0].time, rates[0].close, bars_total);
+      g_tfs[tf_idx].last_live_cross_bar_time[MA_EMA150][MA_EMA200] = rates[0].time;
+     }
+
    BackfillLatestCrossForPair(tf_idx, MA_EMA13, MA_EMA34, ema13, ema34, rates, bars_total);
    BackfillLatestCrossForPair(tf_idx, MA_EMA150, MA_EMA200, ema150, ema200, rates, bars_total);
+   return true;
   }
 
 void RegisterCrossEvent(int tf_idx, int a, int b, int direction, datetime t, double price, int bars_total)
@@ -522,20 +614,21 @@ void DetectCrossesLive(int tf_idx)
       return;
 
    MqlRates rates[];
-   if(!LoadRates(g_tfs[tf_idx].tf, 2, rates))
+   if(!LoadRates(g_tfs[tf_idx].tf, 8, rates))
       return;
 
-   double ma_vals[MA_COUNT][2];
+   double ma_vals[MA_COUNT][8];
    for(int m = 0; m < MA_COUNT; m++)
      {
       double tmp[];
-      if(!LoadBuffer(g_tfs[tf_idx].ma_handles[m], 2, tmp))
+      if(!LoadBuffer(g_tfs[tf_idx].ma_handles[m], 8, tmp))
          return;
-      ma_vals[m][0] = tmp[0];
-      ma_vals[m][1] = tmp[1];
+      for(int j = 0; j < 8; j++)
+         ma_vals[m][j] = tmp[j];
      }
 
    int bars_total = Bars(_Symbol, g_tfs[tf_idx].tf);
+   int max_shift = MathMin(7, ArraySize(rates) - 1);
    for(int a = 0; a < MA_COUNT; a++)
      {
       for(int b = a + 1; b < MA_COUNT; b++)
@@ -544,16 +637,27 @@ void DetectCrossesLive(int tf_idx)
             continue;
 
          int curr_sign_live = SignOf(ma_vals[a][0] - ma_vals[b][0]);
-         int prev_sign_closed = SignOf(ma_vals[a][1] - ma_vals[b][1]);
-
-         if(curr_sign_live == 0 || prev_sign_closed == 0 || curr_sign_live == prev_sign_closed)
+         if(curr_sign_live == 0)
             continue;
+
+         int prev_sign_closed = FindFirstNonZeroSignMatrix(ma_vals, a, b, 1, max_shift);
+         if(prev_sign_closed == 0)
+            prev_sign_closed = g_tfs[tf_idx].last_nonzero_sign[a][b];
+
+         if(prev_sign_closed == 0 || curr_sign_live == prev_sign_closed)
+           {
+            g_tfs[tf_idx].last_nonzero_sign[a][b] = curr_sign_live;
+            continue;
+           }
 
          if(g_tfs[tf_idx].last_live_cross_bar_time[a][b] == rates[0].time)
             continue;
 
          RegisterCrossEvent(tf_idx, a, b, curr_sign_live, rates[0].time, rates[0].close, bars_total);
          g_tfs[tf_idx].last_live_cross_bar_time[a][b] = rates[0].time;
+
+         if(a == MA_EMA13 && b == MA_EMA34)
+            UpdateLatest1334ExtremumWithCandidate(tf_idx, rates[0].time, curr_sign_live > 0 ? rates[0].high : rates[0].low);
         }
      }
   }
@@ -563,38 +667,11 @@ void UpdateCrossExtremums(int tf_idx, const MqlRates &rates[])
    if(g_tfs[tf_idx].cross_count <= 0)
       return;
 
-   // EMA13/34: track the true running extremum after the cross bar.
-   // Up-cross -> bottom (lowest low), Down-cross -> peak (highest high).
+   // EMA13/34: track running extremum, including closed and live bar candidate.
    string pair1334 = PairName(MA_EMA13, MA_EMA34);
    int idx1334 = FindLatestCrossIndexByPair(tf_idx, pair1334);
-   // Include the crossing bar itself so EMA13/34 extremum is anchored from event start.
    if(idx1334 >= 0 && rates[1].time >= g_tfs[tf_idx].cross_events[idx1334].t)
-     {
-      bool want_bottom = (g_tfs[tf_idx].cross_events[idx1334].direction > 0);
-      string ext_type = want_bottom ? "bottom" : "peak";
-      double ext_price = want_bottom ? rates[1].low : rates[1].high;
-
-      bool replace = false;
-      if(!g_tfs[tf_idx].cross_events[idx1334].has_extremum)
-         replace = true;
-      else if(g_tfs[tf_idx].cross_events[idx1334].extremum_type != ext_type)
-         replace = true;
-      else if(want_bottom && ext_price < g_tfs[tf_idx].cross_events[idx1334].extremum_price)
-         replace = true;
-      else if(!want_bottom && ext_price > g_tfs[tf_idx].cross_events[idx1334].extremum_price)
-         replace = true;
-
-      if(replace)
-        {
-         g_tfs[tf_idx].cross_events[idx1334].has_extremum = true;
-         g_tfs[tf_idx].cross_events[idx1334].extremum_type = ext_type;
-         g_tfs[tf_idx].cross_events[idx1334].extremum_t = rates[1].time;
-         g_tfs[tf_idx].cross_events[idx1334].extremum_price = ext_price;
-        }
-
-      g_tfs[tf_idx].state.peak_bottom_reached_1334 = g_tfs[tf_idx].cross_events[idx1334].has_extremum;
-      g_tfs[tf_idx].state.peak_bottom_type_1334 = g_tfs[tf_idx].cross_events[idx1334].extremum_type;
-     }
+      UpdateLatest1334ExtremumWithCandidate(tf_idx, rates[1].time, g_tfs[tf_idx].cross_events[idx1334].direction > 0 ? rates[1].high : rates[1].low);
 
    bool peak = (rates[3].high > rates[1].high && rates[3].high > rates[2].high && rates[3].high > rates[4].high && rates[3].high > rates[5].high);
    bool bottom = (rates[3].low < rates[1].low && rates[3].low < rates[2].low && rates[3].low < rates[4].low && rates[3].low < rates[5].low);
@@ -1692,6 +1769,7 @@ int OnInit()
       g_tfs[i].state.peak_bottom_reached_1334 = false;
       g_tfs[i].state.peak_bottom_type_1334 = "";
       g_tfs[i].state.bars.avg_height = 0.0;
+      g_tfs[i].startup_backfill_ready = false;
 
       for(int a = 0; a < MA_COUNT; a++)
         {
@@ -1729,7 +1807,7 @@ int OnInit()
          return INIT_FAILED;
         }
 
-      BootstrapCrossEventsFromHistory(i);
+      g_tfs[i].startup_backfill_ready = BootstrapCrossEventsFromHistory(i);
      }
 
    return INIT_SUCCEEDED;
@@ -1759,6 +1837,9 @@ void OnTick()
    bool changed = false;
    for(int i = 0; i < TF_COUNT; i++)
      {
+      if(!g_tfs[i].startup_backfill_ready)
+         g_tfs[i].startup_backfill_ready = BootstrapCrossEventsFromHistory(i);
+
       if(UpdateTimeframe(i))
          changed = true;
      }
