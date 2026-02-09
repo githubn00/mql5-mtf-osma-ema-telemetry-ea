@@ -311,6 +311,16 @@ string PairName(int a, int b)
    return MA_NAMES[a] + "_" + MA_NAMES[b];
   }
 
+int FindLatestCrossIndexByPair(int tf_idx, const string pair_name)
+  {
+   for(int i = g_tfs[tf_idx].cross_count - 1; i >= 0; i--)
+     {
+      if(g_tfs[tf_idx].cross_events[i].pair == pair_name)
+         return i;
+     }
+   return -1;
+  }
+
 bool IsTrackedCrossPair(int a, int b)
   {
    if(a == MA_EMA13 && b == MA_EMA34)
@@ -324,6 +334,38 @@ void UpdateCrossExtremums(int tf_idx, const MqlRates &rates[])
    if(g_tfs[tf_idx].cross_count <= 0)
       return;
 
+   // EMA13/34: track the true running extremum after the cross bar.
+   // Up-cross -> bottom (lowest low), Down-cross -> peak (highest high).
+   string pair1334 = PairName(MA_EMA13, MA_EMA34);
+   int idx1334 = FindLatestCrossIndexByPair(tf_idx, pair1334);
+   if(idx1334 >= 0 && rates[1].time > g_tfs[tf_idx].cross_events[idx1334].t)
+     {
+      bool want_bottom = (g_tfs[tf_idx].cross_events[idx1334].direction > 0);
+      string ext_type = want_bottom ? "bottom" : "peak";
+      double ext_price = want_bottom ? rates[1].low : rates[1].high;
+
+      bool replace = false;
+      if(!g_tfs[tf_idx].cross_events[idx1334].has_extremum)
+         replace = true;
+      else if(g_tfs[tf_idx].cross_events[idx1334].extremum_type != ext_type)
+         replace = true;
+      else if(want_bottom && ext_price < g_tfs[tf_idx].cross_events[idx1334].extremum_price)
+         replace = true;
+      else if(!want_bottom && ext_price > g_tfs[tf_idx].cross_events[idx1334].extremum_price)
+         replace = true;
+
+      if(replace)
+        {
+         g_tfs[tf_idx].cross_events[idx1334].has_extremum = true;
+         g_tfs[tf_idx].cross_events[idx1334].extremum_type = ext_type;
+         g_tfs[tf_idx].cross_events[idx1334].extremum_t = rates[1].time;
+         g_tfs[tf_idx].cross_events[idx1334].extremum_price = ext_price;
+        }
+
+      g_tfs[tf_idx].state.peak_bottom_reached_1334 = g_tfs[tf_idx].cross_events[idx1334].has_extremum;
+      g_tfs[tf_idx].state.peak_bottom_type_1334 = g_tfs[tf_idx].cross_events[idx1334].extremum_type;
+     }
+
    bool peak = (rates[3].high > rates[1].high && rates[3].high > rates[2].high && rates[3].high > rates[4].high && rates[3].high > rates[5].high);
    bool bottom = (rates[3].low < rates[1].low && rates[3].low < rates[2].low && rates[3].low < rates[4].low && rates[3].low < rates[5].low);
    if(!peak && !bottom)
@@ -334,6 +376,8 @@ void UpdateCrossExtremums(int tf_idx, const MqlRates &rates[])
       if(g_tfs[tf_idx].cross_events[i].has_extremum)
          continue;
       if(g_tfs[tf_idx].cross_events[i].t >= rates[3].time)
+         continue;
+      if(g_tfs[tf_idx].cross_events[i].pair == pair1334)
          continue;
 
       g_tfs[tf_idx].cross_events[i].has_extremum = true;
@@ -350,11 +394,6 @@ void UpdateCrossExtremums(int tf_idx, const MqlRates &rates[])
          g_tfs[tf_idx].cross_events[i].extremum_price = rates[3].low;
         }
 
-      if(g_tfs[tf_idx].cross_events[i].pair == PairName(MA_EMA13, MA_EMA34))
-        {
-         g_tfs[tf_idx].state.peak_bottom_reached_1334 = true;
-         g_tfs[tf_idx].state.peak_bottom_type_1334 = g_tfs[tf_idx].cross_events[i].extremum_type;
-        }
       break;
      }
   }
