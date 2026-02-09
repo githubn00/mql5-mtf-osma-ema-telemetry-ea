@@ -1,4 +1,4 @@
-// Last updated: 2026-02-08 23:39
+// Last updated: 2026-02-09 00:02
 #property strict
 #property description "Multi-timeframe EMA/SMA + OsMA telemetry EA with JSON state export"
 
@@ -446,36 +446,38 @@ int FindFirstNonZeroSignMatrix(const double &ma_vals[][8], int a, int b, int fro
    return 0;
   }
 
-void UpdateLatest1334ExtremumWithCandidate(int tf_idx, datetime cand_t, double cand_price)
+void UpdateLatestMaPairExtremumWithCandidate(int tf_idx, const string pair_name, int direction, datetime cand_t, double cand_price, bool up_is_peak = true)
   {
-   string pair1334 = PairName(MA_EMA13, MA_EMA34);
-   int idx1334 = FindLatestCrossIndexByPair(tf_idx, pair1334);
-   if(idx1334 < 0)
+   int idx = FindLatestCrossIndexByPair(tf_idx, pair_name);
+   if(idx < 0 || direction == 0)
       return;
 
-   bool want_peak = (g_tfs[tf_idx].cross_events[idx1334].direction > 0);
+   bool want_peak = up_is_peak ? (direction > 0) : (direction < 0);
    string ext_type = want_peak ? "peak" : "bottom";
 
    bool replace = false;
-   if(!g_tfs[tf_idx].cross_events[idx1334].has_extremum)
+   if(!g_tfs[tf_idx].cross_events[idx].has_extremum)
       replace = true;
-   else if(g_tfs[tf_idx].cross_events[idx1334].extremum_type != ext_type)
+   else if(g_tfs[tf_idx].cross_events[idx].extremum_type != ext_type)
       replace = true;
-   else if(want_peak && cand_price > g_tfs[tf_idx].cross_events[idx1334].extremum_price)
+   else if(want_peak && cand_price > g_tfs[tf_idx].cross_events[idx].extremum_price)
       replace = true;
-   else if(!want_peak && cand_price < g_tfs[tf_idx].cross_events[idx1334].extremum_price)
+   else if(!want_peak && cand_price < g_tfs[tf_idx].cross_events[idx].extremum_price)
       replace = true;
 
    if(replace)
      {
-      g_tfs[tf_idx].cross_events[idx1334].has_extremum = true;
-      g_tfs[tf_idx].cross_events[idx1334].extremum_type = ext_type;
-      g_tfs[tf_idx].cross_events[idx1334].extremum_t = cand_t;
-      g_tfs[tf_idx].cross_events[idx1334].extremum_price = cand_price;
+      g_tfs[tf_idx].cross_events[idx].has_extremum = true;
+      g_tfs[tf_idx].cross_events[idx].extremum_type = ext_type;
+      g_tfs[tf_idx].cross_events[idx].extremum_t = cand_t;
+      g_tfs[tf_idx].cross_events[idx].extremum_price = cand_price;
      }
 
-   g_tfs[tf_idx].state.peak_bottom_reached_1334 = g_tfs[tf_idx].cross_events[idx1334].has_extremum;
-   g_tfs[tf_idx].state.peak_bottom_type_1334 = g_tfs[tf_idx].cross_events[idx1334].extremum_type;
+   if(pair_name == PairName(MA_EMA13, MA_EMA34))
+     {
+      g_tfs[tf_idx].state.peak_bottom_reached_1334 = g_tfs[tf_idx].cross_events[idx].has_extremum;
+      g_tfs[tf_idx].state.peak_bottom_type_1334 = g_tfs[tf_idx].cross_events[idx].extremum_type;
+     }
   }
 
 bool FindLatestClosedCrossShift(const double &left[], const double &right[], int from_shift, int max_shift, int &cross_shift, int &direction)
@@ -550,7 +552,7 @@ void BackfillLatestCrossForPair(int tf_idx, int a, int b, const double &left[], 
    else
       ev.bars_since_prev = -1;
 
-   if(a == MA_EMA13 && b == MA_EMA34)
+   if((a == MA_EMA13 && b == MA_EMA34) || (a == MA_EMA150 && b == MA_EMA200))
      {
       bool want_peak = (direction > 0);
       int best_shift = cross_shift;
@@ -705,7 +707,7 @@ bool BootstrapCrossEventsFromHistory(int tf_idx)
      {
       RegisterCrossEvent(tf_idx, MA_EMA13, MA_EMA34, curr1334, rates[0].time, rates[0].close, bars_total);
       g_tfs[tf_idx].last_live_cross_bar_time[MA_EMA13][MA_EMA34] = rates[0].time;
-      UpdateLatest1334ExtremumWithCandidate(tf_idx, rates[0].time, curr1334 > 0 ? rates[0].high : rates[0].low);
+      UpdateLatestMaPairExtremumWithCandidate(tf_idx, PairName(MA_EMA13, MA_EMA34), curr1334, rates[0].time, curr1334 > 0 ? rates[0].high : rates[0].low);
      }
 
    int curr150200 = SignOf(ema150[0] - ema200[0]);
@@ -714,6 +716,7 @@ bool BootstrapCrossEventsFromHistory(int tf_idx)
      {
       RegisterCrossEvent(tf_idx, MA_EMA150, MA_EMA200, curr150200, rates[0].time, rates[0].close, bars_total);
       g_tfs[tf_idx].last_live_cross_bar_time[MA_EMA150][MA_EMA200] = rates[0].time;
+      UpdateLatestMaPairExtremumWithCandidate(tf_idx, PairName(MA_EMA150, MA_EMA200), curr150200, rates[0].time, curr150200 > 0 ? rates[0].high : rates[0].low);
      }
 
    BackfillLatestCrossForPair(tf_idx, MA_EMA13, MA_EMA34, ema13, ema34, rates, bars_total);
@@ -813,8 +816,8 @@ void DetectCrossesLive(int tf_idx)
          RegisterCrossEvent(tf_idx, a, b, curr_sign_live, rates[0].time, rates[0].close, bars_total);
          g_tfs[tf_idx].last_live_cross_bar_time[a][b] = rates[0].time;
 
-         if(a == MA_EMA13 && b == MA_EMA34)
-            UpdateLatest1334ExtremumWithCandidate(tf_idx, rates[0].time, curr_sign_live > 0 ? rates[0].high : rates[0].low);
+         if((a == MA_EMA13 && b == MA_EMA34) || (a == MA_EMA150 && b == MA_EMA200))
+            UpdateLatestMaPairExtremumWithCandidate(tf_idx, PairName(a, b), curr_sign_live, rates[0].time, curr_sign_live > 0 ? rates[0].high : rates[0].low);
         }
      }
   }
@@ -824,11 +827,16 @@ void UpdateCrossExtremums(int tf_idx, const MqlRates &rates[])
    if(g_tfs[tf_idx].cross_count <= 0)
       return;
 
-   // EMA13/34: track running extremum, including closed and live bar candidate.
+   // EMA13/34 and EMA150/200: track directional running extremum using close-bar candidate.
    string pair1334 = PairName(MA_EMA13, MA_EMA34);
+   string pair150200 = PairName(MA_EMA150, MA_EMA200);
    int idx1334 = FindLatestCrossIndexByPair(tf_idx, pair1334);
    if(idx1334 >= 0 && rates[1].time >= g_tfs[tf_idx].cross_events[idx1334].t)
-      UpdateLatest1334ExtremumWithCandidate(tf_idx, rates[1].time, g_tfs[tf_idx].cross_events[idx1334].direction > 0 ? rates[1].high : rates[1].low);
+      UpdateLatestMaPairExtremumWithCandidate(tf_idx, pair1334, g_tfs[tf_idx].cross_events[idx1334].direction, rates[1].time, g_tfs[tf_idx].cross_events[idx1334].direction > 0 ? rates[1].high : rates[1].low);
+
+   int idx150200 = FindLatestCrossIndexByPair(tf_idx, pair150200);
+   if(idx150200 >= 0 && rates[1].time >= g_tfs[tf_idx].cross_events[idx150200].t)
+      UpdateLatestMaPairExtremumWithCandidate(tf_idx, pair150200, g_tfs[tf_idx].cross_events[idx150200].direction, rates[1].time, g_tfs[tf_idx].cross_events[idx150200].direction > 0 ? rates[1].high : rates[1].low);
 
    bool peak = (rates[3].high > rates[1].high && rates[3].high > rates[2].high && rates[3].high > rates[4].high && rates[3].high > rates[5].high);
    bool bottom = (rates[3].low < rates[1].low && rates[3].low < rates[2].low && rates[3].low < rates[4].low && rates[3].low < rates[5].low);
@@ -841,7 +849,7 @@ void UpdateCrossExtremums(int tf_idx, const MqlRates &rates[])
          continue;
       if(g_tfs[tf_idx].cross_events[i].t >= rates[3].time)
          continue;
-      if(g_tfs[tf_idx].cross_events[i].pair == pair1334)
+      if(g_tfs[tf_idx].cross_events[i].pair == pair1334 || g_tfs[tf_idx].cross_events[i].pair == pair150200)
          continue;
 
       g_tfs[tf_idx].cross_events[i].has_extremum = true;
