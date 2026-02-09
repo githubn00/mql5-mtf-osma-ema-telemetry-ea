@@ -1,4 +1,4 @@
-// Last updated: 2026-02-08 23:20
+// Last updated: 2026-02-08 23:39
 #property strict
 #property description "Multi-timeframe EMA/SMA + OsMA telemetry EA with JSON state export"
 
@@ -330,9 +330,9 @@ void UpdateLatestOsmaExtremumWithCandidate(int tf_idx, datetime t, double osma_v
       replace = true;
    else if(g_tfs[tf_idx].osma_events[idx].extremum_type != ext_type)
       replace = true;
-   else if(want_peak && osma_value > g_tfs[tf_idx].osma_events[idx].extremum_value)
+   else if(want_peak && price > g_tfs[tf_idx].osma_events[idx].extremum_price)
       replace = true;
-   else if(!want_peak && osma_value < g_tfs[tf_idx].osma_events[idx].extremum_value)
+   else if(!want_peak && price < g_tfs[tf_idx].osma_events[idx].extremum_price)
       replace = true;
 
    if(replace)
@@ -350,7 +350,7 @@ void RegisterOsmaZeroCross(int tf_idx, int direction, datetime t, double osma_va
    OsmaEvent ev;
    ev.event_type = "zero_cross";
    ev.t = t;
-   ev.value = osma_value;
+   ev.value = close_price;
    ev.price = close_price;
    ev.direction = direction;
    ev.has_extremum = false;
@@ -653,18 +653,20 @@ void BackfillLatestOsmaZeroCross(int tf_idx, const double &osma[], const MqlRate
    bool want_peak = (direction > 0);
    int best_shift = cross_shift;
    double best_value = osma[cross_shift];
+   double best_price = direction > 0 ? rates[cross_shift].high : rates[cross_shift].low;
 
    for(int s = cross_shift - 1; s >= 1; s--)
      {
-      double candidate = osma[s];
-      if((want_peak && candidate > best_value) || (!want_peak && candidate < best_value))
+      double candidate_price = direction > 0 ? rates[s].high : rates[s].low;
+      if((want_peak && candidate_price > best_price) || (!want_peak && candidate_price < best_price))
         {
-         best_value = candidate;
+         best_value = osma[s];
+         best_price = candidate_price;
          best_shift = s;
         }
      }
 
-   UpdateLatestOsmaExtremumWithCandidate(tf_idx, rates[best_shift].time, osma[best_shift], rates[best_shift].close);
+   UpdateLatestOsmaExtremumWithCandidate(tf_idx, rates[best_shift].time, best_value, best_price);
   }
 
 bool BootstrapCrossEventsFromHistory(int tf_idx)
@@ -937,7 +939,8 @@ void DetectOsma(int tf_idx, const double &osma[], const MqlRates &rates[])
    int idx = FindLatestOsmaZeroCrossIndex(tf_idx);
    if(idx >= 0 && rates[1].time >= g_tfs[tf_idx].osma_events[idx].t)
      {
-      UpdateLatestOsmaExtremumWithCandidate(tf_idx, rates[1].time, osma[1], rates[1].close);
+      double osma_ext_price = g_tfs[tf_idx].osma_events[idx].direction > 0 ? rates[1].high : rates[1].low;
+      UpdateLatestOsmaExtremumWithCandidate(tf_idx, rates[1].time, osma[1], osma_ext_price);
      }
   }
 
@@ -1604,7 +1607,7 @@ string BuildOsmaEventJson(const OsmaEvent &ev)
    string s = "{";
    s += "\"type\":\"" + JsonEscape(ev.event_type) + "\",";
    s += "\"time\":" + TimeToJson(ev.t) + ",";
-   s += "\"value\":" + DoubleToString(ev.value, 8) + ",";
+   s += "\"value\":" + DoubleToString(ev.value, _Digits) + ",";
    s += "\"price\":" + DoubleToString(ev.price, _Digits) + ",";
     s += "\"barsSincePrev\":" + IntegerToString(ev.bars_since_prev) + ",";
    s += "\"hasExtremum\":" + BoolJson(ev.has_extremum) + ",";
