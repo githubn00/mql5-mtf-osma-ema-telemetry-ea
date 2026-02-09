@@ -1,4 +1,4 @@
-// Last updated: 2026-02-08 20:55
+// Last updated: 2026-02-08 21:20
 #property strict
 #property description "Multi-timeframe EMA/SMA + OsMA telemetry EA with JSON state export"
 
@@ -126,6 +126,7 @@ struct TfRuntime
    datetime last_cross_time[MA_COUNT][MA_COUNT];
    int last_nonzero_sign[MA_COUNT][MA_COUNT];
    bool last_sign_initialized[MA_COUNT][MA_COUNT];
+   datetime last_live_cross_bar_time[MA_COUNT][MA_COUNT];
 
    CrossEvent cross_events[MAX_CROSS_EVENTS];
    int cross_count;
@@ -179,6 +180,7 @@ input int InpOsmaSignal = 3;
 input int InpOsmaFast = 12;
 input int InpOsmaSlow = 59;
 input bool InpPrintEventArraysEveryTick = true;
+input bool InpLiveCrossDetection = true;
 
 CTrade g_trade;
 TfRuntime g_tfs[TF_COUNT];
@@ -331,6 +333,92 @@ bool IsTrackedCrossPair(int a, int b)
       return true;
    return false;
   }
+
+void RegisterCrossEvent(int tf_idx, int a, int b, int direction, datetime t, double price, int bars_total)
+  {
+   CrossEvent ev;
+   ev.pair = PairName(a, b);
+   ev.t = t;
+   ev.price = price;
+   ev.direction = direction;
+   ev.has_extremum = false;
+   ev.extremum_type = "";
+   ev.extremum_t = 0;
+   ev.extremum_price = 0.0;
+
+   int last_bars_total = g_tfs[tf_idx].last_cross_bars_total[a][b];
+   if(last_bars_total > 0)
+      ev.bars_since_prev = MathAbs(bars_total - last_bars_total);
+   else
+      ev.bars_since_prev = -1;
+
+   g_tfs[tf_idx].last_cross_bars_total[a][b] = bars_total;
+   g_tfs[tf_idx].last_cross_time[a][b] = ev.t;
+   g_tfs[tf_idx].last_nonzero_sign[a][b] = direction;
+
+   AddCrossEvent(tf_idx, ev);
+
+   if(a == MA_EMA13 && b == MA_EMA34)
+     {
+      g_tfs[tf_idx].state.bars_after_cross_1334 = 0;
+      g_tfs[tf_idx].state.peak_bottom_reached_1334 = false;
+      g_tfs[tf_idx].state.peak_bottom_type_1334 = "";
+      if(direction > 0)
+         g_tfs[tf_idx].state.ema1334_just_cross_up = true;
+      else
+         g_tfs[tf_idx].state.ema1334_just_cross_down = true;
+     }
+
+   if(a == MA_EMA150 && b == MA_EMA200)
+     {
+      g_tfs[tf_idx].state.bars_after_cross_150200 = 0;
+      if(g_tfs[tf_idx].tf == PERIOD_D1)
+         TrackD1Cross150200(ev);
+     }
+  }
+
+void DetectCrossesLive(int tf_idx)
+  {
+   if(!InpLiveCrossDetection)
+      return;
+
+   MqlRates rates[];
+   if(!LoadRates(g_tfs[tf_idx].tf, 2, rates))
+      return;
+
+   double ma_vals[MA_COUNT][2];
+   for(int m = 0; m < MA_COUNT; m++)
+     {
+      double tmp[];
+      if(!LoadBuffer(g_tfs[tf_idx].ma_handles[m], 2, tmp))
+         return;
+      ma_vals[m][0] = tmp[0];
+      ma_vals[m][1] = tmp[1];
+     }
+
+   int bars_total = Bars(_Symbol, g_tfs[tf_idx].tf);
+   for(int a = 0; a < MA_COUNT; a++)
+     {
+      for(int b = a + 1; b < MA_COUNT; b++)
+        {
+         if(!IsTrackedCrossPair(a, b))
+            continue;
+
+         int curr_sign_live = SignOf(ma_vals[a][0] - ma_vals[b][0]);
+         int prev_sign_closed = SignOf(ma_vals[a][1] - ma_vals[b][1]);
+
+         if(curr_sign_live == 0 || prev_sign_closed == 0 || curr_sign_live == prev_sign_closed)
+            continue;
+
+         if(g_tfs[tf_idx].last_live_cross_bar_time[a][b] == rates[0].time)
+            continue;
+
+         RegisterCrossEvent(tf_idx, a, b, curr_sign_live, rates[0].time, rates[0].close, bars_total);
+         g_tfs[tf_idx].last_live_cross_bar_time[a][b] = rates[0].time;
+        }
+     }
+  }
+
 void UpdateCrossExtremums(int tf_idx, const MqlRates &rates[])
   {
    if(g_tfs[tf_idx].cross_count <= 0)
@@ -446,46 +534,8 @@ void DetectCrosses(int tf_idx, const double &ma_vals[][8], const MqlRates &rates
 
          if(g_tfs[tf_idx].last_cross_time[a][b] == rates[1].time)
             continue;
-
-         CrossEvent ev;
-         ev.pair = PairName(a, b);
-         ev.t = rates[1].time;
-         ev.price = rates[1].close;
-         ev.direction = curr_sign;
-         ev.has_extremum = false;
-         ev.extremum_type = "";
-         ev.extremum_t = 0;
-         ev.extremum_price = 0.0;
-
-         int last_bars_total = g_tfs[tf_idx].last_cross_bars_total[a][b];
-         if(last_bars_total > 0)
-            ev.bars_since_prev = MathAbs(bars_total - last_bars_total);
-         else
-            ev.bars_since_prev = -1;
-
-         g_tfs[tf_idx].last_cross_bars_total[a][b] = bars_total;
-         g_tfs[tf_idx].last_cross_time[a][b] = ev.t;
-         g_tfs[tf_idx].last_nonzero_sign[a][b] = curr_sign;
-
-         AddCrossEvent(tf_idx, ev);
-
-         if(a == MA_EMA13 && b == MA_EMA34)
-           {
-            g_tfs[tf_idx].state.bars_after_cross_1334 = 0;
-            g_tfs[tf_idx].state.peak_bottom_reached_1334 = false;
-            g_tfs[tf_idx].state.peak_bottom_type_1334 = "";
-            if(curr_sign > 0)
-               g_tfs[tf_idx].state.ema1334_just_cross_up = true;
-            else
-               g_tfs[tf_idx].state.ema1334_just_cross_down = true;
-           }
-
-         if(a == MA_EMA150 && b == MA_EMA200)
-           {
-            g_tfs[tf_idx].state.bars_after_cross_150200 = 0;
-            if(g_tfs[tf_idx].tf == PERIOD_D1)
-               TrackD1Cross150200(ev);
-           }
+         
+         RegisterCrossEvent(tf_idx, a, b, curr_sign, rates[1].time, rates[1].close, bars_total);
         }
      }
   }
@@ -1494,6 +1544,7 @@ int OnInit()
             g_tfs[i].last_cross_time[a][b] = 0;
             g_tfs[i].last_nonzero_sign[a][b] = 0;
             g_tfs[i].last_sign_initialized[a][b] = false;
+            g_tfs[i].last_live_cross_bar_time[a][b] = 0;
            }
         }
 
@@ -1552,6 +1603,9 @@ void OnTick()
       if(UpdateTimeframe(i))
          changed = true;
      }
+
+   for(int i = 0; i < TF_COUNT; i++)
+      DetectCrossesLive(i);
 
    if(changed)
      {
