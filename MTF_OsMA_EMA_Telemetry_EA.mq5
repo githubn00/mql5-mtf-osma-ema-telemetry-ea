@@ -144,6 +144,22 @@ struct ReassessEvent
    string new_sid;
   };
 
+struct EventTableRow
+  {
+   string tf;
+   string event;
+   string pair;
+   datetime t;
+   double value;
+   int direction;
+   int bars_since_prev;
+   bool has_extremum;
+   string extremum_type;
+   datetime extremum_t;
+   double extremum_price;
+   string phase;
+  };
+
 input bool InpDryRun = true;
 input StrategyMode InpStrategyMode = STRAT_BASE;
 input double InpFixedLot = 0.01;
@@ -160,6 +176,7 @@ input bool InpEnableSwingRules = true;
 input int InpOsmaSignal = 3;
 input int InpOsmaFast = 12;
 input int InpOsmaSlow = 59;
+input bool InpPrintEventArraysEveryTick = true;
 
 CTrade g_trade;
 TfRuntime g_tfs[TF_COUNT];
@@ -293,6 +310,15 @@ string PairName(int a, int b)
   {
    return MA_NAMES[a] + "_" + MA_NAMES[b];
   }
+
+bool IsTrackedCrossPair(int a, int b)
+  {
+   if(a == MA_EMA13 && b == MA_EMA34)
+      return true;
+   if(a == MA_EMA150 && b == MA_EMA200)
+      return true;
+   return false;
+  }
 void UpdateCrossExtremums(int tf_idx, const MqlRates &rates[])
   {
    if(g_tfs[tf_idx].cross_count <= 0)
@@ -344,6 +370,9 @@ void DetectCrosses(int tf_idx, const double &ma_vals[][8], const MqlRates &rates
      {
       for(int b = a + 1; b < MA_COUNT; b++)
         {
+         if(!IsTrackedCrossPair(a, b))
+            continue;
+
          double prev_diff = ma_vals[a][2] - ma_vals[b][2];
          double curr_diff = ma_vals[a][1] - ma_vals[b][1];
 
@@ -609,6 +638,188 @@ void AddReassessEvent(long ticket, string reason, string prev_sid, string new_si
 bool ContainsText(string base, string probe)
   {
    return StringFind(base, probe, 0) >= 0;
+  }
+
+void PrintTfCrossArrayTable(int tf_idx)
+  {
+   // deprecated: replaced by unified event table
+  }
+
+void PrintTfOsmaArrayTable(int tf_idx)
+  {
+   // deprecated: replaced by unified event table
+  }
+
+void BuildUnifiedEventTable(EventTableRow &rows[])
+  {
+   ArrayResize(rows, 0);
+   int row_count = 0;
+   string osma_pair = "OSMA(3,15)";
+
+   for(int i = 0; i < TF_COUNT; i++)
+     {
+      for(int c = 0; c < g_tfs[i].cross_count; c++)
+        {
+         CrossEvent ev = g_tfs[i].cross_events[c];
+         if(ev.pair != PairName(MA_EMA13, MA_EMA34) && ev.pair != PairName(MA_EMA150, MA_EMA200))
+            continue;
+
+         ArrayResize(rows, row_count + 1);
+         rows[row_count].tf = g_tfs[i].tf_name;
+         rows[row_count].event = "cross";
+         rows[row_count].pair = ev.pair;
+         rows[row_count].t = ev.t;
+         rows[row_count].value = ev.price;
+         rows[row_count].direction = ev.direction;
+         rows[row_count].bars_since_prev = ev.bars_since_prev;
+         rows[row_count].has_extremum = ev.has_extremum;
+         rows[row_count].extremum_type = ev.extremum_type;
+         rows[row_count].extremum_t = ev.extremum_t;
+         rows[row_count].extremum_price = ev.extremum_price;
+         rows[row_count].phase = PhaseToString(g_tfs[i].state.phase);
+         row_count++;
+        }
+
+      for(int o = 0; o < g_tfs[i].osma_count; o++)
+        {
+         OsmaEvent ev = g_tfs[i].osma_events[o];
+         ArrayResize(rows, row_count + 1);
+         rows[row_count].tf = g_tfs[i].tf_name;
+         rows[row_count].event = ev.event_type;
+         rows[row_count].pair = osma_pair;
+         rows[row_count].t = ev.t;
+         rows[row_count].value = ev.value;
+         rows[row_count].direction = ev.direction;
+         rows[row_count].bars_since_prev = -1;
+         rows[row_count].has_extremum = false;
+         rows[row_count].extremum_type = "";
+         rows[row_count].extremum_t = 0;
+         rows[row_count].extremum_price = 0.0;
+         rows[row_count].phase = PhaseToString(g_tfs[i].state.phase);
+         row_count++;
+        }
+     }
+  }
+
+void PrintAllEventArraysOnTick()
+  {
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   PrintFormat("[TICK-ARRAY] begin tick=%s bid=%s ask=%s",
+               TimeToString(TimeCurrent(), TIME_DATE | TIME_SECONDS),
+               DoubleToString(bid, _Digits),
+               DoubleToString(ask, _Digits));
+
+   EventTableRow rows[];
+   BuildUnifiedEventTable(rows);
+   PrintFormat("[TICK-ARRAY][UnifiedEventTable] rows=%d", ArraySize(rows));
+   if(ArraySize(rows) > 0)
+      ArrayPrint(rows);
+
+   Print("[TICK-ARRAY] end");
+  }
+
+string EventDirectionToString(int direction)
+  {
+   if(direction > 0) return "Up";
+   if(direction < 0) return "Down";
+   return "Flat";
+  }
+
+bool LastCrossByPair(int tf_idx, string pair, CrossEvent &ev)
+  {
+   for(int i = g_tfs[tf_idx].cross_count - 1; i >= 0; i--)
+     {
+      if(g_tfs[tf_idx].cross_events[i].pair != pair)
+         continue;
+      ev = g_tfs[tf_idx].cross_events[i];
+      return true;
+     }
+   return false;
+  }
+
+bool LastOsmaZeroCross(int tf_idx, OsmaEvent &ev)
+  {
+   for(int i = g_tfs[tf_idx].osma_count - 1; i >= 0; i--)
+     {
+      if(g_tfs[tf_idx].osma_events[i].event_type != "zero_cross")
+         continue;
+      ev = g_tfs[tf_idx].osma_events[i];
+      return true;
+     }
+   return false;
+  }
+
+int ManagedOpenPositionsCount()
+  {
+   int cnt = 0;
+   for(int i = 0; i < PositionsTotal(); i++)
+     {
+      ulong ticket = PositionGetTicket(i);
+      if(!PositionSelectByTicket(ticket))
+         continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol)
+         continue;
+      if((int)PositionGetInteger(POSITION_MAGIC) != InpMagic)
+         continue;
+      cnt++;
+     }
+   return cnt;
+  }
+
+string BuildUnclosedEventLine(int tf_idx)
+  {
+   CrossEvent ev150200;
+   CrossEvent ev1334;
+   OsmaEvent osma0;
+
+   string pair150200 = PairName(MA_EMA150, MA_EMA200);
+   string pair1334 = PairName(MA_EMA13, MA_EMA34);
+
+   bool has150200 = LastCrossByPair(tf_idx, pair150200, ev150200);
+   bool has1334 = LastCrossByPair(tf_idx, pair1334, ev1334);
+   bool hasOsma0 = LastOsmaZeroCross(tf_idx, osma0);
+
+   string s = g_tfs[tf_idx].tf_name + " | ";
+
+   if(has150200)
+      s += "150/200 " + EventDirectionToString(ev150200.direction) + " age=" + IntegerToString(g_tfs[tf_idx].state.bars_after_cross_150200);
+   else
+      s += "150/200 none";
+
+   s += " | ";
+   if(has1334)
+      s += "13/34 " + EventDirectionToString(ev1334.direction) + " age=" + IntegerToString(g_tfs[tf_idx].state.bars_after_cross_1334) + " phase=" + PhaseToString(g_tfs[tf_idx].state.phase);
+   else
+      s += "13/34 none";
+
+   s += " | ";
+   if(hasOsma0)
+      s += "OsMA0 " + EventDirectionToString(osma0.direction);
+   else
+      s += "OsMA0 none";
+
+   return s;
+  }
+
+void UpdateChartUnclosedEventsPanel()
+  {
+   string panel = "UNCLOSED EVENTS LIVE STATUS\n";
+   panel += _Symbol + " mode=" + StrategyModeToString(InpStrategyMode) + " dryRun=" + (InpDryRun ? "true" : "false");
+   panel += " openPos=" + IntegerToString(ManagedOpenPositionsCount()) + "\n";
+   panel += "tick=" + TimeToString(TimeCurrent(), TIME_DATE | TIME_SECONDS);
+   panel += " bid=" + DoubleToString(SymbolInfoDouble(_Symbol, SYMBOL_BID), _Digits);
+   panel += " ask=" + DoubleToString(SymbolInfoDouble(_Symbol, SYMBOL_ASK), _Digits) + "\n";
+   panel += "Legend: age=bars since last crossing event\n";
+
+   for(int i = 0; i < TF_COUNT; i++)
+     {
+      panel += BuildUnclosedEventLine(i);
+      if(i < TF_COUNT - 1)
+         panel += "\n";
+     }
+
+   Comment(panel);
   }
 
 void ManagePositions(bool strong_buy, bool strong_sell)
@@ -1205,6 +1416,8 @@ void OnDeinit(const int reason)
       if(g_tfs[i].atr_handle != INVALID_HANDLE)
          IndicatorRelease(g_tfs[i].atr_handle);
      }
+
+   Comment("");
   }
 
 void OnTick()
@@ -1221,4 +1434,9 @@ void OnTick()
       EvaluateSignalsAndTrade();
       WriteJsonState();
      }
+
+   UpdateChartUnclosedEventsPanel();
+
+   if(InpPrintEventArraysEveryTick)
+      PrintAllEventArraysOnTick();
   }
