@@ -10,6 +10,8 @@
 
 body {
   margin: 0;
+  background: #edf3fb;
+  color: #1c2430;
 }
 
 .layout {
@@ -20,6 +22,15 @@ body {
   gap: 12px;
 }
 
+.layout-dark {
+  color: #dbe7ff;
+}
+
+body.dark-page {
+  background: #050b17;
+  color: #dbe7ff;
+}
+
 .panel {
   background: #fff;
   border: 1px solid #dbe5f2;
@@ -28,6 +39,12 @@ body {
 }
 
 .panel-dark {
+  background: #0f172a;
+  border-color: #334155;
+  color: #dbe7ff;
+}
+
+.layout-dark .panel {
   background: #0f172a;
   border-color: #334155;
   color: #dbe7ff;
@@ -51,6 +68,11 @@ body {
   font-size: 12px;
 }
 
+.layout-dark .chip {
+  border-color: #475569;
+  background: #111b31;
+}
+
 .tfbar {
   display: flex;
   gap: 8px;
@@ -69,6 +91,14 @@ body {
   background: #0057b8;
   color: #fff;
   border-color: #0057b8;
+}
+
+.layout-dark .tfbar button,
+.layout-dark .controls-row button,
+.layout-dark .buttons button {
+  border-color: #475569;
+  background: #16223c;
+  color: #dbe7ff;
 }
 
 .controls-row {
@@ -117,6 +147,10 @@ body {
   margin-bottom: 8px;
 }
 
+.layout-dark .crosshair-panel {
+  color: #9fb1cc;
+}
+
 .table-wrap {
   overflow-x: auto;
 }
@@ -132,6 +166,11 @@ td {
   border-bottom: 1px solid #e4ebf5;
   text-align: left;
   padding: 6px;
+}
+
+.layout-dark th,
+.layout-dark td {
+  border-bottom-color: #1e293b;
 }
 
 .meta-grid {
@@ -158,6 +197,10 @@ button.close {
 
 .muted {
   color: #6a7b92;
+}
+
+.layout-dark .muted {
+  color: #9fb1cc;
 }
 
 .error {
@@ -193,9 +236,14 @@ button.close {
   padding: 4px 0;
 }
 
+.layout-dark .action-item {
+  border-bottom-color: #1e293b;
+}
+
 @media (max-width: 800px) {
   .status-row {
     flex-direction: column;
     gap: 4px;
   }
 }
+

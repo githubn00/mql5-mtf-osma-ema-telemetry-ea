@@ -1,4 +1,4 @@
-﻿import { useMemo, useState } from "react";
+﻿import { useEffect, useMemo, useState } from "react";
 import "./App.css";
 import { ChartPanel } from "./components/ChartPanel";
 import { EventInspector } from "./components/EventInspector";
@@ -17,6 +17,7 @@ function App() {
   const [tf, setTf] = useState<TfName>("M1");
   const [selectedEvent, setSelectedEvent] = useState<ChartEvent | null>(null);
   const [toast, setToast] = useState("");
+  const [darkMode, setDarkMode] = useState(false);
 
   const chartData = (state.live?.chart?.[tf] as any) ?? undefined;
   const symbol = state.meta?.symbol || "UNKNOWN";
@@ -27,6 +28,10 @@ function App() {
     return `${s}s`;
   }, [state._stateUpdatedAt]);
 
+  useEffect(() => {
+    document.body.classList.toggle("dark-page", darkMode);
+    return () => document.body.classList.remove("dark-page");
+  }, [darkMode]);
   const onAction = async (action: "buy" | "sell" | "close_all") => {
     await submit(action, symbol);
     setToast(`Action ${action.toUpperCase()} accepted`);
@@ -34,7 +39,7 @@ function App() {
   };
 
   return (
-    <main className="layout">
+    <main className={`layout ${darkMode ? "layout-dark" : ""}`}>
       <header className="panel hero">
         <h1>MTF OsMA EMA Telemetry UI</h1>
         <div className="status-row">
@@ -58,7 +63,13 @@ function App() {
         ))}
       </section>
 
-      <ChartPanel tf={tf} data={chartData} onSelectEvent={setSelectedEvent} />
+      <ChartPanel
+        tf={tf}
+        data={chartData}
+        onSelectEvent={setSelectedEvent}
+        darkMode={darkMode}
+        onToggleDarkMode={() => setDarkMode((v) => !v)}
+      />
       <SignalPanel state={state} />
       <TelemetryTable state={state} />
       <TradePanel symbol={symbol} busy={busy} onAction={onAction} />
@@ -68,4 +79,5 @@ function App() {
 }
 
 export default App;
+
 
