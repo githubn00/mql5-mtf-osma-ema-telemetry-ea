@@ -167,9 +167,13 @@ struct EventTableRow
    int direction;
    int bars_since_prev;
    bool has_extremum;
+   string extremum;
    string extremum_type;
    datetime extremum_t;
    double extremum_price;
+   int extremum_bar;
+   int cross_age_1334;
+   int cross_age_150200;
    string phase;
   };
 
@@ -184,6 +188,13 @@ input double InpNearCrossThresholdPoints = 80.0;
 input int InpConvergenceBars = 3;
 input int InpProjectionHorizonBars = 1;
 input string InpJsonFile = "ea_multitf_state.json";
+input bool InpJsonUseCommonFolder = true;
+input bool InpEnableHttpTelemetry = false;
+input string InpTelemetryUrl = "http://127.0.0.1:8765/api/telemetry";
+input int InpTelemetryTimeoutMs = 1200;
+input int InpTelemetryMinIntervalMs = 500;
+input bool InpHttpVerboseErrors = true;
+input bool InpTelemetryExportEveryTick = true;
 input bool InpEnableScalpRules = true;
 input bool InpEnableSwingRules = true;
 input int InpOsmaSignal = 3;
@@ -203,6 +214,7 @@ int g_d1_150200_count = 0;
 string g_last_recommendation = "NONE";
 int g_sid_counter = 0;
 double g_last_scalp_win = 0.0;
+uint g_last_http_send_ms = 0;
 
 const ENUM_TIMEFRAMES TF_VALUES[TF_COUNT] = {PERIOD_M1, PERIOD_M5, PERIOD_M15, PERIOD_H1, PERIOD_H4, PERIOD_D1};
 const string TF_NAMES[TF_COUNT] = {"M1", "M5", "M15", "H1", "H4", "D1"};
@@ -1152,122 +1164,127 @@ void BuildUnifiedEventTable(EventTableRow &rows[])
 
    for(int i = 0; i < TF_COUNT; i++)
      {
-      for(int history_index = 0; history_index <= 2; history_index++)
+      for(int pair_slot = 0; pair_slot < 3; pair_slot++)
         {
-         CrossEvent ev;
-         OsmaEvent osma_ev;
-         bool found_cross = false;
-         bool found_osma = false;
+         string pair_name = (pair_slot == 0 ? pair1334 : (pair_slot == 1 ? pair150200 : osma_pair));
+         bool is_osma = (pair_slot == 2);
 
-         // EMA13/EMA34 row at index N
-         ArrayResize(rows, row_count + 1);
-         rows[row_count].index = history_index;
-         rows[row_count].tf = g_tfs[i].tf_name;
-         rows[row_count].pair = pair1334;
-         rows[row_count].event = "none";
-         rows[row_count].t = 0;
-         rows[row_count].value = 0.0;
-         rows[row_count].direction = 0;
-         rows[row_count].bars_since_prev = -1;
-         rows[row_count].has_extremum = false;
-         rows[row_count].extremum_type = "";
-         rows[row_count].extremum_t = 0;
-         rows[row_count].extremum_price = 0.0;
-         rows[row_count].phase = PhaseToString(g_tfs[i].state.phase);
-         found_cross = CrossByPairAtIndex(i, pair1334, history_index, ev);
-         if(found_cross)
+         for(int history_index = 0; history_index <= 2; history_index++)
            {
-            rows[row_count].event = "cross";
-            rows[row_count].t = ev.t;
-            rows[row_count].value = ev.price;
-            rows[row_count].direction = ev.direction;
-            rows[row_count].bars_since_prev = ev.bars_since_prev;
-            rows[row_count].has_extremum = ev.has_extremum;
-            rows[row_count].extremum_type = ev.extremum_type;
-            rows[row_count].extremum_t = ev.extremum_t;
-            rows[row_count].extremum_price = ev.extremum_price;
-           }
-         row_count++;
+            CrossEvent ev;
+            OsmaEvent osma_ev;
+            bool found_cross = false;
+            bool found_osma = false;
 
-         // EMA150/EMA200 row at index N
-         ArrayResize(rows, row_count + 1);
-         rows[row_count].index = history_index;
-         rows[row_count].tf = g_tfs[i].tf_name;
-         rows[row_count].pair = pair150200;
-         rows[row_count].event = "none";
-         rows[row_count].t = 0;
-         rows[row_count].value = 0.0;
-         rows[row_count].direction = 0;
-         rows[row_count].bars_since_prev = -1;
-         rows[row_count].has_extremum = false;
-         rows[row_count].extremum_type = "";
-         rows[row_count].extremum_t = 0;
-         rows[row_count].extremum_price = 0.0;
-         rows[row_count].phase = PhaseToString(g_tfs[i].state.phase);
-         found_cross = CrossByPairAtIndex(i, pair150200, history_index, ev);
-         if(found_cross)
-           {
-            rows[row_count].event = "cross";
-            rows[row_count].t = ev.t;
-            rows[row_count].value = ev.price;
-            rows[row_count].direction = ev.direction;
-            rows[row_count].bars_since_prev = ev.bars_since_prev;
-            rows[row_count].has_extremum = ev.has_extremum;
-            rows[row_count].extremum_type = ev.extremum_type;
-            rows[row_count].extremum_t = ev.extremum_t;
-            rows[row_count].extremum_price = ev.extremum_price;
-           }
-         row_count++;
+            ArrayResize(rows, row_count + 1);
+            rows[row_count].index = history_index;
+            rows[row_count].tf = g_tfs[i].tf_name;
+            rows[row_count].pair = pair_name;
+            rows[row_count].event = "none";
+            rows[row_count].t = 0;
+            rows[row_count].value = 0.0;
+            rows[row_count].direction = 0;
+            rows[row_count].bars_since_prev = -1;
+            rows[row_count].has_extremum = false;
+            rows[row_count].extremum = "";
+            rows[row_count].extremum_type = "";
+            rows[row_count].extremum_t = 0;
+            rows[row_count].extremum_price = 0.0;
+            rows[row_count].extremum_bar = -1;
+            rows[row_count].cross_age_1334 = g_tfs[i].state.bars_after_cross_1334;
+            rows[row_count].cross_age_150200 = g_tfs[i].state.bars_after_cross_150200;
+            rows[row_count].phase = PhaseToString(g_tfs[i].state.phase);
 
-         // OsMA(3,15) zero-cross row at index N
-         ArrayResize(rows, row_count + 1);
-         rows[row_count].index = history_index;
-         rows[row_count].tf = g_tfs[i].tf_name;
-         rows[row_count].pair = osma_pair;
-         rows[row_count].event = "none";
-         rows[row_count].t = 0;
-         rows[row_count].value = 0.0;
-         rows[row_count].direction = 0;
-         rows[row_count].bars_since_prev = -1;
-         rows[row_count].has_extremum = false;
-         rows[row_count].extremum_type = "";
-         rows[row_count].extremum_t = 0;
-         rows[row_count].extremum_price = 0.0;
-         rows[row_count].phase = PhaseToString(g_tfs[i].state.phase);
-         found_osma = OsmaZeroCrossAtIndex(i, history_index, osma_ev);
-         if(found_osma)
-           {
-            rows[row_count].event = osma_ev.event_type;
-            rows[row_count].t = osma_ev.t;
-            rows[row_count].value = osma_ev.value;
-            rows[row_count].direction = osma_ev.direction;
-            rows[row_count].bars_since_prev = osma_ev.bars_since_prev;
-            rows[row_count].has_extremum = osma_ev.has_extremum;
-            rows[row_count].extremum_type = osma_ev.extremum_type;
-            rows[row_count].extremum_t = osma_ev.extremum_t;
-            rows[row_count].extremum_price = osma_ev.extremum_price;
+            if(!is_osma)
+              {
+               found_cross = CrossByPairAtIndex(i, pair_name, history_index, ev);
+               if(found_cross)
+                 {
+                  rows[row_count].event = "cross";
+                  rows[row_count].t = ev.t;
+                  rows[row_count].value = ev.price;
+                  rows[row_count].direction = ev.direction;
+                  rows[row_count].bars_since_prev = ev.bars_since_prev;
+                  rows[row_count].has_extremum = ev.has_extremum;
+                  rows[row_count].extremum_type = ev.extremum_type;
+                  rows[row_count].extremum_t = ev.extremum_t;
+                  rows[row_count].extremum_price = ev.extremum_price;
+                  if(ev.has_extremum)
+                    {
+                     rows[row_count].extremum = ev.extremum_type + "@" + DoubleToString(ev.extremum_price, _Digits);
+                     rows[row_count].extremum_bar = ExtremumBarShift(i, ev.extremum_t);
+                    }
+                 }
+              }
+            else
+              {
+               found_osma = OsmaZeroCrossAtIndex(i, history_index, osma_ev);
+               if(found_osma)
+                 {
+                  rows[row_count].event = osma_ev.event_type;
+                  rows[row_count].t = osma_ev.t;
+                  rows[row_count].value = osma_ev.value;
+                  rows[row_count].direction = osma_ev.direction;
+                  rows[row_count].bars_since_prev = osma_ev.bars_since_prev;
+                  rows[row_count].has_extremum = osma_ev.has_extremum;
+                  rows[row_count].extremum_type = osma_ev.extremum_type;
+                  rows[row_count].extremum_t = osma_ev.extremum_t;
+                  rows[row_count].extremum_price = osma_ev.extremum_price;
+                  if(osma_ev.has_extremum)
+                    {
+                     rows[row_count].extremum = osma_ev.extremum_type + "@" + DoubleToString(osma_ev.extremum_price, _Digits);
+                     rows[row_count].extremum_bar = ExtremumBarShift(i, osma_ev.extremum_t);
+                    }
+                 }
+              }
+
+            row_count++;
            }
-         row_count++;
         }
      }
   }
 
 void PrintAllEventArraysOnTick()
   {
-   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-   PrintFormat("[TICK-ARRAY] begin tick=%s bid=%s ask=%s",
-               TimeToString(TimeCurrent(), TIME_DATE | TIME_SECONDS),
-               DoubleToString(bid, _Digits),
-               DoubleToString(ask, _Digits));
-
    EventTableRow rows[];
    BuildUnifiedEventTable(rows);
-   PrintFormat("[TICK-ARRAY][UnifiedEventTable] rows=%d", ArraySize(rows));
    if(ArraySize(rows) > 0)
-      ArrayPrint(rows);
+     {
+      Print("[index] [tf] [event] [pair] [t] [value] [direction] [bars_since_prev] [has_extremum] [extremum] [extremum_type] [extremum_t] [extremum_price] [extremum_bar] [cross_age_1334] [cross_age_150200] [phase]");
+      for(int i = 0; i < ArraySize(rows); i++)
+        {
+         string t_str = (rows[i].t > 0 ? TimeToString(rows[i].t, TIME_DATE | TIME_SECONDS) : "-");
+         string ext_t_str = (rows[i].extremum_t > 0 ? TimeToString(rows[i].extremum_t, TIME_DATE | TIME_SECONDS) : "-");
+         string has_ext = (rows[i].has_extremum ? "true" : "false");
 
-   Print("[TICK-ARRAY] end");
+         Print(
+            "[", IntegerToString(rows[i].index), "] ",
+            "[", rows[i].tf, "] ",
+            "[", rows[i].event, "] ",
+            "[", rows[i].pair, "] ",
+            "[", t_str, "] ",
+            "[", DoubleToString(rows[i].value, _Digits), "] ",
+            "[", IntegerToString(rows[i].direction), "] ",
+            "[", IntegerToString(rows[i].bars_since_prev), "] ",
+            "[", has_ext, "] ",
+            "[", rows[i].extremum, "] ",
+            "[", rows[i].extremum_type, "] ",
+            "[", ext_t_str, "] ",
+            "[", DoubleToString(rows[i].extremum_price, _Digits), "] ",
+            "[", IntegerToString(rows[i].extremum_bar), "] ",
+            "[", IntegerToString(rows[i].cross_age_1334), "] ",
+            "[", IntegerToString(rows[i].cross_age_150200), "] ",
+            "[", rows[i].phase, "]"
+         );
+        }
+     }
+
+   for(int i = 0; i < TF_COUNT; i++)
+     {
+      string age1334 = IntegerToString(g_tfs[i].state.bars_after_cross_1334);
+      string age150200 = IntegerToString(g_tfs[i].state.bars_after_cross_150200);
+      Print("CrossAge tf=", g_tfs[i].tf_name, " 13/34=", age1334, " 150/200=", age150200, " phase=", PhaseToString(g_tfs[i].state.phase));
+     }
   }
 
 string EventDirectionToString(int direction)
@@ -1343,6 +1360,16 @@ bool LastOsmaEvent(int tf_idx, OsmaEvent &ev)
    return true;
   }
 
+int ExtremumBarShift(int tf_idx, datetime t)
+  {
+   if(t <= 0)
+      return -1;
+   int shift = iBarShift(_Symbol, g_tfs[tf_idx].tf, t, false);
+   if(shift < 0)
+      return -1;
+   return shift;
+  }
+
 int ManagedOpenPositionsCount()
   {
    int cnt = 0;
@@ -1398,6 +1425,7 @@ string BuildUnclosedEventLine(int tf_idx)
          s += " ext=" + ev1334.extremum_type;
          s += "@" + TimeToString(ev1334.extremum_t, TIME_DATE | TIME_MINUTES);
          s += "/" + DoubleToString(ev1334.extremum_price, _Digits);
+         s += " extBar=" + IntegerToString(ExtremumBarShift(tf_idx, ev1334.extremum_t));
         }
      }
    else
@@ -1702,7 +1730,7 @@ string BuildBarStatsJson(const BarStats &b)
    return s;
   }
 
-void WriteJsonState()
+string BuildStateJson()
   {
    string json = "{";
 
@@ -1760,6 +1788,16 @@ void WriteJsonState()
    json += "\"per_tf_state\":{";
    for(int tfi = 0; tfi < TF_COUNT; tfi++)
      {
+      CrossEvent ev1334_live;
+      bool has_1334 = LastCrossByPair(tfi, PairName(MA_EMA13, MA_EMA34), ev1334_live);
+      string ext_1334 = "";
+      int ext_bar_1334 = -1;
+      if(has_1334 && ev1334_live.has_extremum)
+        {
+         ext_1334 = ev1334_live.extremum_type + "@" + DoubleToString(ev1334_live.extremum_price, _Digits);
+         ext_bar_1334 = ExtremumBarShift(tfi, ev1334_live.extremum_t);
+        }
+
       if(tfi > 0) json += ",";
       json += "\"" + g_tfs[tfi].tf_name + "\":{";
       json += "\"direction\":\"" + TrendToString(g_tfs[tfi].state.direction) + "\",";
@@ -1769,6 +1807,8 @@ void WriteJsonState()
       json += "\"osmaAboutScore\":" + DoubleToString(g_tfs[tfi].state.osma_about_score, 4) + ",";
       json += "\"barsAfterCross1334\":" + IntegerToString(g_tfs[tfi].state.bars_after_cross_1334) + ",";
       json += "\"barsAfterCross150200\":" + IntegerToString(g_tfs[tfi].state.bars_after_cross_150200) + ",";
+      json += "\"extremum1334\":\"" + JsonEscape(ext_1334) + "\",";
+      json += "\"extremumBar1334\":" + IntegerToString(ext_bar_1334) + ",";
       json += "\"barPosVsMAs\":{";
       for(int m = 0; m < MA_COUNT; m++)
         {
@@ -1907,7 +1947,16 @@ void WriteJsonState()
 
    json += "}";
 
-   int h = FileOpen(InpJsonFile, FILE_WRITE | FILE_TXT | FILE_ANSI);
+   return json;
+  }
+
+void WriteJsonState(const string &json)
+  {
+   int flags = FILE_WRITE | FILE_TXT | FILE_ANSI;
+   if(InpJsonUseCommonFolder)
+      flags |= FILE_COMMON;
+
+   int h = FileOpen(InpJsonFile, flags);
    if(h == INVALID_HANDLE)
      {
       Print("Failed to open JSON file: ", InpJsonFile, " err=", GetLastError());
@@ -1916,6 +1965,49 @@ void WriteJsonState()
 
    FileWriteString(h, json);
    FileClose(h);
+  }
+
+void SendJsonStateHttp(const string &json)
+  {
+   if(!InpEnableHttpTelemetry)
+      return;
+   if(StringLen(InpTelemetryUrl) <= 0)
+      return;
+
+   if(InpTelemetryMinIntervalMs > 0 && g_last_http_send_ms > 0)
+     {
+      uint elapsed = GetTickCount() - g_last_http_send_ms;
+      if(elapsed < (uint)InpTelemetryMinIntervalMs)
+         return;
+     }
+
+   char payload[];
+   StringToCharArray(json, payload, 0, WHOLE_ARRAY, CP_UTF8);
+   int payload_size = ArraySize(payload);
+   if(payload_size > 0 && payload[payload_size - 1] == 0)
+      payload_size--;
+
+   char result[];
+   string result_headers = "";
+
+   ResetLastError();
+   int status = WebRequest("POST", InpTelemetryUrl, "", "", InpTelemetryTimeoutMs, payload, payload_size, result, result_headers);
+   if(status == -1)
+     {
+      int err = GetLastError();
+      if(InpHttpVerboseErrors)
+         Print("HTTP telemetry failed url=", InpTelemetryUrl, " err=", err, ". Add URL in MT5: Tools -> Options -> Expert Advisors -> Allow WebRequest for listed URL");
+      return;
+     }
+
+   if(status < 200 || status >= 300)
+     {
+      if(InpHttpVerboseErrors)
+         Print("HTTP telemetry non-2xx status=", status, " url=", InpTelemetryUrl);
+      return;
+     }
+
+   g_last_http_send_ms = GetTickCount();
   }
 bool UpdateTimeframe(int tf_idx)
   {
@@ -1966,6 +2058,8 @@ bool UpdateTimeframe(int tf_idx)
 int OnInit()
   {
    g_trade.SetExpertMagicNumber(InpMagic);
+   if(InpEnableHttpTelemetry)
+      Print("HTTP telemetry enabled url=", InpTelemetryUrl);
 
    for(int i = 0; i < TF_COUNT; i++)
      {
@@ -2067,7 +2161,13 @@ void OnTick()
    if(changed)
      {
       EvaluateSignalsAndTrade();
-      WriteJsonState();
+     }
+
+   if(changed || InpTelemetryExportEveryTick)
+     {
+      string json = BuildStateJson();
+      WriteJsonState(json);
+      SendJsonStateHttp(json);
      }
 
    UpdateChartUnclosedEventsPanel();

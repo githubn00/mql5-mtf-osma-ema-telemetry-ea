@@ -122,6 +122,76 @@ Applied only when position comment contains `SCALP` and `InpEnableScalpRules=tru
 - No fixed TP/SL is set at entry; management is signal and risk-rule driven.
 - JSON telemetry is written to `MQL5/Files` (`InpJsonFile`) and includes live signal states and position metadata.
 
+## External dashboard (HTTP push)
+
+This repo includes `dashboard_server.py`, a local HTTP receiver + browser dashboard.
+
+### 1. Start dashboard server
+
+From repo root:
+
+```bash
+python dashboard_server.py
+```
+
+It listens on `http://127.0.0.1:8765`.
+
+Open this in a browser:
+
+- `http://127.0.0.1:8765/`
+
+For Strategy Tester + live compatibility, prefer file mode:
+
+```bash
+python dashboard_server.py --prefer-file --json-file "C:\\Users\\<you>\\AppData\\Roaming\\MetaQuotes\\Terminal\\Common\\Files\\ea_multitf_state.json"
+```
+
+Auto-detect mode is also supported (recommended first):
+
+```bash
+python dashboard_server.py --prefer-file
+```
+
+In auto-detect mode, the server scans:
+
+- configured `--json-file` (if provided)
+- `Terminal\\Common\\Files\\ea_multitf_state.json`
+- `Tester\\*\\Agent-*\\MQL5\\Files\\ea_multitf_state.json`
+
+and serves the freshest state.
+
+`--json-file` is only used directly when you pass an absolute path.
+
+You can open this folder from MT5:
+
+- `File -> Open Common Data Folder`, then go to `Files`.
+
+### 2. Enable HTTP telemetry in EA inputs
+
+Set:
+
+- `InpEnableHttpTelemetry = true`
+- `InpTelemetryUrl = "http://127.0.0.1:8765/api/telemetry"`
+- `InpJsonUseCommonFolder = true` (recommended so tester/live write to same shared file)
+- optional: `InpTelemetryTimeoutMs`, `InpTelemetryMinIntervalMs`
+
+### 3. MT5 terminal setting required
+
+In MetaTrader 5:
+
+- `Tools -> Options -> Expert Advisors`
+- enable `Allow WebRequest for listed URL`
+- add: `http://127.0.0.1:8765`
+
+With this enabled, on each state change the EA still writes `InpJsonFile` and also POSTs the same JSON to the dashboard.
+
+Notes:
+
+- In Strategy Tester, `WebRequest` can be blocked; `--prefer-file` mode keeps the dashboard updating from JSON file.
+- In live trading, both sources can work; HTTP gives lower latency while file mode remains a fallback.
+- Debug source selection via `http://127.0.0.1:8765/api/state` fields:
+- `_source`, `_selectedFile`, `_stateUpdatedAt`, `_fileUpdatedAt`, `_httpUpdatedAt`, `_fileMtime`.
+
 ## JSON Structure (`InpJsonFile`)
 
 Top-level keys:
