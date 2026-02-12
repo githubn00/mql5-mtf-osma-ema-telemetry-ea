@@ -152,6 +152,12 @@ body.dark-page {
   min-height: 380px;
 }
 
+.osma-root {
+  width: 100%;
+  min-height: 140px;
+  margin-top: 8px;
+}
+
 .crosshair-panel {
   display: flex;
   flex-wrap: wrap;

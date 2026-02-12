@@ -45,15 +45,23 @@ function nearestEvent(events: ChartEvent[], time: number, price?: number) {
 
 export function ChartPanel({ tf, data, onSelectEvent, darkMode, onToggleDarkMode, bid, ask, spreadPoints, countdown }: Props) {
   const panelRef = useRef<HTMLDivElement | null>(null);
-  const rootRef = useRef<HTMLDivElement | null>(null);
-  const chartRef = useRef<any>(null);
+  const priceRootRef = useRef<HTMLDivElement | null>(null);
+  const osmaRootRef = useRef<HTMLDivElement | null>(null);
+
+  const priceChartRef = useRef<any>(null);
+  const osmaChartRef = useRef<any>(null);
+
   const candleRef = useRef<any>(null);
+  const osmaSeriesRef = useRef<any>(null);
+
   const bidLineRef = useRef<any>(null);
   const askLineRef = useRef<any>(null);
+
   const linesRef = useRef<Record<IndicatorKey, any>>({} as Record<IndicatorKey, any>);
   const eventsRef = useRef<ChartEvent[]>([]);
   const didInitialFitRef = useRef(false);
   const prevTfRef = useRef<TfName>(tf);
+  const syncingRangeRef = useRef(false);
 
   const [crosshair, setCrosshair] = useState<CrosshairValues | null>(null);
   const [indicatorVisible, setIndicatorVisible] = useState<Record<IndicatorKey, boolean>>({
@@ -85,22 +93,36 @@ export function ChartPanel({ tf, data, onSelectEvent, darkMode, onToggleDarkMode
   );
 
   useEffect(() => {
-    if (!rootRef.current || chartRef.current) return;
+    if (!priceRootRef.current || !osmaRootRef.current || priceChartRef.current || osmaChartRef.current) return;
 
-    const chart = createChart(rootRef.current, {
-      layout: {
-        background: { type: ColorType.Solid, color: "#ffffff" },
-        textColor: "#1f2937",
-      },
-      width: rootRef.current.clientWidth,
-      height: 420,
+    const baseOptions = {
       crosshair: { mode: CrosshairMode.Normal },
       rightPriceScale: { borderColor: "#d6dce5" },
       timeScale: { borderColor: "#d6dce5", timeVisible: true, secondsVisible: false },
       grid: { vertLines: { color: "#eef2f7" }, horzLines: { color: "#eef2f7" } },
+    };
+
+    const priceChart = createChart(priceRootRef.current, {
+      ...baseOptions,
+      layout: {
+        background: { type: ColorType.Solid, color: "#ffffff" },
+        textColor: "#1f2937",
+      },
+      width: priceRootRef.current.clientWidth,
+      height: 340,
     });
 
-    const candle = chart.addCandlestickSeries({
+    const osmaChart = createChart(osmaRootRef.current, {
+      ...baseOptions,
+      layout: {
+        background: { type: ColorType.Solid, color: "#ffffff" },
+        textColor: "#1f2937",
+      },
+      width: osmaRootRef.current.clientWidth,
+      height: 140,
+    });
+
+    const candle = priceChart.addCandlestickSeries({
       upColor: "#16a34a",
       downColor: "#dc2626",
       wickUpColor: "#16a34a",
@@ -108,25 +130,8 @@ export function ChartPanel({ tf, data, onSelectEvent, darkMode, onToggleDarkMode
       borderVisible: false,
     });
 
-    bidLineRef.current = candle.createPriceLine({
-      price: 0,
-      color: "#22c55e",
-      lineWidth: 1,
-      lineStyle: LineStyle.Dotted,
-      axisLabelVisible: true,
-      title: "Bid",
-    });
-    askLineRef.current = candle.createPriceLine({
-      price: 0,
-      color: "#ef4444",
-      lineWidth: 1,
-      lineStyle: LineStyle.Dotted,
-      axisLabelVisible: true,
-      title: "Ask",
-    });
-
-    const makeLine = (key: IndicatorKey, color: string, width = 2, style = LineStyle.Solid) => {
-      linesRef.current[key] = chart.addLineSeries({
+    const makeLine = (key: Exclude<IndicatorKey, "osma">, color: string, width = 2, style = LineStyle.Solid) => {
+      linesRef.current[key] = priceChart.addLineSeries({
         color,
         lineWidth: width as any,
         lineStyle: style,
@@ -142,7 +147,29 @@ export function ChartPanel({ tf, data, onSelectEvent, darkMode, onToggleDarkMode
     makeLine("ema200", "#ef4444", 1, LineStyle.Dashed);
     makeLine("sma2", "#0ea5e9", 1);
     makeLine("sma5", "#14b8a6", 1);
-    makeLine("osma", "#111827", 1);
+
+    const osmaSeries = osmaChart.addHistogramSeries({
+      color: "#111827",
+      priceLineVisible: false,
+      lastValueVisible: false,
+    });
+
+    const syncFromPrice = (range: any) => {
+      if (!range || syncingRangeRef.current || !osmaChartRef.current) return;
+      syncingRangeRef.current = true;
+      osmaChartRef.current.timeScale().setVisibleLogicalRange(range);
+      syncingRangeRef.current = false;
+    };
+
+    const syncFromOsma = (range: any) => {
+      if (!range || syncingRangeRef.current || !priceChartRef.current) return;
+      syncingRangeRef.current = true;
+      priceChartRef.current.timeScale().setVisibleLogicalRange(range);
+      syncingRangeRef.current = false;
+    };
+
+    priceChart.timeScale().subscribeVisibleLogicalRangeChange(syncFromPrice);
+    osmaChart.timeScale().subscribeVisibleLogicalRangeChange(syncFromOsma);
 
     const handleClick = (param: any) => {
       if (!param || !param.time) {
@@ -166,6 +193,8 @@ export function ChartPanel({ tf, data, onSelectEvent, darkMode, onToggleDarkMode
         const p = param.seriesData?.get(linesRef.current[k]);
         if (p && typeof p.value === "number") values[k] = p.value;
       });
+      const op = param.seriesData?.get(osmaSeriesRef.current);
+      if (op && typeof op.value === "number") values.osma = op.value;
 
       setCrosshair({
         time: Number(param.time),
@@ -177,25 +206,38 @@ export function ChartPanel({ tf, data, onSelectEvent, darkMode, onToggleDarkMode
       });
     };
 
-    chart.subscribeClick(handleClick);
-    chart.subscribeCrosshairMove(handleCrosshair);
+    priceChart.subscribeClick(handleClick);
+    priceChart.subscribeCrosshairMove(handleCrosshair);
+    osmaChart.subscribeCrosshairMove(handleCrosshair);
 
     const onResize = () => {
-      if (!rootRef.current || !chartRef.current) return;
-      chartRef.current.applyOptions({ width: rootRef.current.clientWidth });
+      if (priceRootRef.current && priceChartRef.current) {
+        priceChartRef.current.applyOptions({ width: priceRootRef.current.clientWidth });
+      }
+      if (osmaRootRef.current && osmaChartRef.current) {
+        osmaChartRef.current.applyOptions({ width: osmaRootRef.current.clientWidth });
+      }
     };
     window.addEventListener("resize", onResize);
 
-    chartRef.current = chart;
+    priceChartRef.current = priceChart;
+    osmaChartRef.current = osmaChart;
     candleRef.current = candle;
+    osmaSeriesRef.current = osmaSeries;
 
     return () => {
       window.removeEventListener("resize", onResize);
-      chart.unsubscribeClick(handleClick);
-      chart.unsubscribeCrosshairMove(handleCrosshair);
-      chart.remove();
-      chartRef.current = null;
+      priceChart.unsubscribeClick(handleClick);
+      priceChart.unsubscribeCrosshairMove(handleCrosshair);
+      osmaChart.unsubscribeCrosshairMove(handleCrosshair);
+      priceChart.timeScale().unsubscribeVisibleLogicalRangeChange(syncFromPrice);
+      osmaChart.timeScale().unsubscribeVisibleLogicalRangeChange(syncFromOsma);
+      priceChart.remove();
+      osmaChart.remove();
+      priceChartRef.current = null;
+      osmaChartRef.current = null;
       candleRef.current = null;
+      osmaSeriesRef.current = null;
       linesRef.current = {} as Record<IndicatorKey, any>;
       bidLineRef.current = null;
       askLineRef.current = null;
@@ -203,28 +245,38 @@ export function ChartPanel({ tf, data, onSelectEvent, darkMode, onToggleDarkMode
   }, [onSelectEvent]);
 
   useEffect(() => {
-    if (!chartRef.current || !candleRef.current) return;
+    if (!priceChartRef.current || !osmaChartRef.current || !candleRef.current || !osmaSeriesRef.current) return;
 
     eventsRef.current = data?.events ?? [];
-    const visible = chartRef.current.timeScale().getVisibleLogicalRange();
+    const visible = priceChartRef.current.timeScale().getVisibleLogicalRange();
 
     candleRef.current.setData(bars);
 
     const indicators = data?.indicators;
-    const setLine = (key: IndicatorKey, points?: { time: number; value: number }[]) => {
+    const setPriceLine = (key: Exclude<IndicatorKey, "osma">, points?: { time: number; value: number }[]) => {
       const s = linesRef.current[key];
       if (!s) return;
-      const mapped = (points ?? []).map((p) => ({ time: p.time as any, value: p.value }));
+      const mapped = (points ?? [])
+        .filter((p) => Number.isFinite(p.time) && Number.isFinite(p.value) && p.time > 0 && p.value > 0)
+        .map((p) => ({ time: p.time as any, value: p.value }));
       s.setData(mapped);
     };
 
-    setLine("ema13", indicators?.ema13);
-    setLine("ema34", indicators?.ema34);
-    setLine("ema150", indicators?.ema150);
-    setLine("ema200", indicators?.ema200);
-    setLine("sma2", indicators?.sma2);
-    setLine("sma5", indicators?.sma5);
-    setLine("osma", indicators?.osma);
+    setPriceLine("ema13", indicators?.ema13);
+    setPriceLine("ema34", indicators?.ema34);
+    setPriceLine("ema150", indicators?.ema150);
+    setPriceLine("ema200", indicators?.ema200);
+    setPriceLine("sma2", indicators?.sma2);
+    setPriceLine("sma5", indicators?.sma5);
+
+    const osmaMapped = (indicators?.osma ?? [])
+      .filter((p) => Number.isFinite(p.time) && Number.isFinite(p.value) && p.time > 0)
+      .map((p) => ({
+        time: p.time as any,
+        value: p.value,
+        color: p.value >= 0 ? "#16a34a" : "#dc2626",
+      }));
+    osmaSeriesRef.current.setData(osmaMapped);
 
     const markers = (data?.events ?? [])
       .filter((ev) => markerVisible[(ev.type as MarkerKey) ?? "cross"] ?? true)
@@ -241,42 +293,90 @@ export function ChartPanel({ tf, data, onSelectEvent, darkMode, onToggleDarkMode
     const tfChanged = prevTfRef.current !== tf;
     prevTfRef.current = tf;
     if (!didInitialFitRef.current || tfChanged) {
-      chartRef.current.timeScale().fitContent();
+      priceChartRef.current.timeScale().fitContent();
       didInitialFitRef.current = true;
     } else if (visible) {
-      chartRef.current.timeScale().setVisibleLogicalRange(visible);
+      priceChartRef.current.timeScale().setVisibleLogicalRange(visible);
+      osmaChartRef.current.timeScale().setVisibleLogicalRange(visible);
     }
   }, [bars, data, tf, markerVisible]);
 
   useEffect(() => {
-    if (bidLineRef.current && typeof bid === "number" && bid > 0) {
-      bidLineRef.current.applyOptions({ price: bid });
+    if (typeof bid === "number" && bid > 0) {
+      if (!bidLineRef.current && candleRef.current) {
+        bidLineRef.current = candleRef.current.createPriceLine({
+          price: bid,
+          color: "#22c55e",
+          lineWidth: 1,
+          lineStyle: LineStyle.Dotted,
+          axisLabelVisible: true,
+          title: "Bid",
+        });
+      } else if (bidLineRef.current) {
+        bidLineRef.current.applyOptions({
+          price: bid,
+          lineVisible: true,
+          axisLabelVisible: true,
+          title: "Bid",
+        });
+      }
+    } else if (bidLineRef.current) {
+      bidLineRef.current.applyOptions({ lineVisible: false, axisLabelVisible: false });
     }
-    if (askLineRef.current && typeof ask === "number" && ask > 0) {
-      askLineRef.current.applyOptions({ price: ask });
+
+    if (typeof ask === "number" && ask > 0) {
+      if (!askLineRef.current && candleRef.current) {
+        askLineRef.current = candleRef.current.createPriceLine({
+          price: ask,
+          color: "#ef4444",
+          lineWidth: 1,
+          lineStyle: LineStyle.Dotted,
+          axisLabelVisible: true,
+          title: "Ask",
+        });
+      } else if (askLineRef.current) {
+        askLineRef.current.applyOptions({
+          price: ask,
+          lineVisible: true,
+          axisLabelVisible: true,
+          title: "Ask",
+        });
+      }
+    } else if (askLineRef.current) {
+      askLineRef.current.applyOptions({ lineVisible: false, axisLabelVisible: false });
     }
   }, [bid, ask]);
 
   useEffect(() => {
-    if (!chartRef.current) return;
-    chartRef.current.applyOptions({
-      layout: {
-        background: { type: ColorType.Solid, color: darkMode ? "#0f172a" : "#ffffff" },
-        textColor: darkMode ? "#dbe7ff" : "#1f2937",
-      },
-      rightPriceScale: { borderColor: darkMode ? "#334155" : "#d6dce5" },
-      timeScale: { borderColor: darkMode ? "#334155" : "#d6dce5", timeVisible: true, secondsVisible: false },
-      grid: {
-        vertLines: { color: darkMode ? "#1e293b" : "#eef2f7" },
-        horzLines: { color: darkMode ? "#1e293b" : "#eef2f7" },
-      },
-    });
+    if (!priceChartRef.current || !osmaChartRef.current) return;
 
-    (Object.keys(linesRef.current) as IndicatorKey[]).forEach((k) => {
+    const applyTheme = (chart: any) => {
+      chart.applyOptions({
+        layout: {
+          background: { type: ColorType.Solid, color: darkMode ? "#0f172a" : "#ffffff" },
+          textColor: darkMode ? "#dbe7ff" : "#1f2937",
+        },
+        rightPriceScale: { borderColor: darkMode ? "#334155" : "#d6dce5" },
+        timeScale: { borderColor: darkMode ? "#334155" : "#d6dce5", timeVisible: true, secondsVisible: false },
+        grid: {
+          vertLines: { color: darkMode ? "#1e293b" : "#eef2f7" },
+          horzLines: { color: darkMode ? "#1e293b" : "#eef2f7" },
+        },
+      });
+    };
+
+    applyTheme(priceChartRef.current);
+    applyTheme(osmaChartRef.current);
+
+    (Object.keys(linesRef.current) as Exclude<IndicatorKey, "osma">[]).forEach((k) => {
       const s = linesRef.current[k];
       if (!s) return;
       s.applyOptions({ visible: indicatorVisible[k] });
     });
+
+    if (osmaSeriesRef.current) {
+      osmaSeriesRef.current.applyOptions({ visible: indicatorVisible.osma });
+    }
   }, [darkMode, indicatorVisible]);
 
   const toggleIndicator = (k: IndicatorKey) => {
@@ -306,7 +406,7 @@ export function ChartPanel({ tf, data, onSelectEvent, darkMode, onToggleDarkMode
       </div>
 
       <div className="controls-row">
-        <button onClick={() => chartRef.current?.timeScale().fitContent()}>Reset Zoom</button>
+        <button onClick={() => priceChartRef.current?.timeScale().fitContent()}>Reset Zoom</button>
         <button onClick={onToggleDarkMode}>{darkMode ? "Light" : "Dark"}</button>
         <button onClick={() => void toggleFullscreen()}>Fullscreen</button>
         <span className="quote-chip">Bid: {typeof bid === "number" ? bid.toFixed(2) : "-"}</span>
@@ -342,7 +442,8 @@ export function ChartPanel({ tf, data, onSelectEvent, darkMode, onToggleDarkMode
         <span>OSMA: {fmt(crosshair?.values.osma, 4)}</span>
       </div>
 
-      <div ref={rootRef} className="chart-root" />
+      <div ref={priceRootRef} className="chart-root" />
+      <div ref={osmaRootRef} className="osma-root" />
     </section>
   );
 }
