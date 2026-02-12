@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { CandlestickChart, Clock3, DollarSign, FileText, RefreshCw, Server, Target, Timer } from "lucide-react";
 import "./App.css";
 import { ChartPanel } from "./components/ChartPanel";
 import { EventInspector } from "./components/EventInspector";
@@ -84,20 +85,23 @@ function App() {
   return (
     <main className={`layout ${darkMode ? "layout-dark" : ""}`}>
       <header className="panel hero">
-        <h1>MTF OsMA EMA Telemetry UI</h1>
+        <h1>
+          <CandlestickChart size={24} className="icon" />
+          MTF OsMA EMA Telemetry UI
+        </h1>
         <div className="status-row">
-          <span>Symbol: {symbol}</span>
-          <span>Updated: {state.meta?.updatedAt ? new Date(state.meta.updatedAt * 1000).toLocaleString() : "-"}</span>
-          <span>Recommendation: {state.meta?.recommendation || "-"}</span>
+          <span className="status-item"><Target size={13} className="icon" />Symbol: {symbol}</span>
+          <span className="status-item"><Clock3 size={13} className="icon" />Updated: {state.meta?.updatedAt ? new Date(state.meta.updatedAt * 1000).toLocaleString() : "-"}</span>
+          <span className="status-item"><RefreshCw size={13} className="icon" />Recommendation: {state.meta?.recommendation || "-"}</span>
         </div>
         <div className="status-row">
-          <span className="chip">Source: {state._source || "-"}</span>
-          <span className="chip">Freshness: {freshness}</span>
-          <span className="chip">File: {state._selectedFile || "-"}</span>
-          <span className="chip">Bid: {state.live?.quote?.bid?.toFixed?.(2) ?? "-"}</span>
-          <span className="chip">Ask: {state.live?.quote?.ask?.toFixed?.(2) ?? "-"}</span>
-          <span className="chip">Spread: {state.live?.quote?.spreadPoints?.toFixed?.(1) ?? "-"} pt</span>
-          <span className="chip">{tf} close in: {countdown}</span>
+          <span className="chip icon-chip"><Server size={12} className="icon" />Source: {state._source || "-"}</span>
+          <span className="chip icon-chip"><Clock3 size={12} className="icon" />Freshness: {freshness}</span>
+          <span className="chip icon-chip"><FileText size={12} className="icon" />File: {state._selectedFile || "-"}</span>
+          <span className="chip icon-chip"><DollarSign size={12} className="icon" />Bid: {state.live?.quote?.bid?.toFixed?.(2) ?? "-"}</span>
+          <span className="chip icon-chip"><DollarSign size={12} className="icon" />Ask: {state.live?.quote?.ask?.toFixed?.(2) ?? "-"}</span>
+          <span className="chip icon-chip"><DollarSign size={12} className="icon" />Spread: {state.live?.quote?.spreadPoints?.toFixed?.(1) ?? "-"} pt</span>
+          <span className="chip icon-chip"><Timer size={12} className="icon" />{tf} close in: {countdown}</span>
         </div>
         {error && <div className="error">State error: {error}</div>}
         {actionError && <div className="error">Action error: {actionError}</div>}

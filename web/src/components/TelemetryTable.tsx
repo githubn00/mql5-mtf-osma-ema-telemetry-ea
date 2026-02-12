@@ -1,4 +1,5 @@
-﻿import type { TelemetryState } from "../types";
+import { ArrowDown, ArrowUp, Table2 } from "lucide-react";
+import type { TelemetryState } from "../types";
 
 interface Props {
   state: TelemetryState;
@@ -10,7 +11,7 @@ export function TelemetryTable({ state }: Props) {
   return (
     <section className="panel">
       <div className="panel-head">
-        <h3>Per TF State</h3>
+        <h3><Table2 size={15} className="icon" />Per TF State</h3>
       </div>
       <div className="table-wrap">
         <table>
@@ -37,7 +38,11 @@ export function TelemetryTable({ state }: Props) {
             {tfs.map(([tf, r]) => (
               <tr key={tf}>
                 <td>{tf}</td>
-                <td>{r.direction}</td>
+                <td className={r.direction === "Up" ? "dir-up" : r.direction === "Down" ? "dir-down" : ""}>
+                  {r.direction === "Up" && <ArrowUp size={12} className="icon" />}
+                  {r.direction === "Down" && <ArrowDown size={12} className="icon" />}
+                  {r.direction}
+                </td>
                 <td>{r.phase}</td>
                 <td>{r.directionStabilized ? "YES" : "NO"}</td>
                 <td>{(r.ema1334AboutScore ?? 0).toFixed(4)}</td>
@@ -54,4 +59,3 @@ export function TelemetryTable({ state }: Props) {
     </section>
   );
 }
-

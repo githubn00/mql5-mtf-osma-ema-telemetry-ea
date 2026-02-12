@@ -1,3 +1,4 @@
+import { Copy, History, Search, MousePointerClick } from "lucide-react";
 import type { ActionRecord, ChartEvent } from "../types";
 
 interface Props {
@@ -14,9 +15,9 @@ export function EventInspector({ event, actions }: Props) {
   return (
     <section className="panel">
       <div className="panel-head">
-        <h3>Event Inspector</h3>
+        <h3><Search size={15} className="icon" />Event Inspector</h3>
       </div>
-      {!event ? <div className="muted">Click a marker/candle to inspect nearest event.</div> : (
+      {!event ? <div className="muted"><MousePointerClick size={13} className="icon" />Click a marker/candle to inspect nearest event.</div> : (
         <>
           <div className="event-grid">
             <div><strong>Type</strong>: {event.type}</div>
@@ -33,13 +34,13 @@ export function EventInspector({ event, actions }: Props) {
             <div><strong>Phase</strong>: {event.phase || "-"}</div>
           </div>
           <div className="controls-row">
-            <button onClick={() => void copyEvent()}>Copy JSON</button>
+            <button onClick={() => void copyEvent()}><Copy size={13} className="icon" />Copy JSON</button>
           </div>
           <pre className="code">{JSON.stringify(event, null, 2)}</pre>
         </>
       )}
 
-      <h4>Recent Actions</h4>
+      <h4><History size={14} className="icon" />Recent Actions</h4>
       <div className="actions-list">
         {actions.length === 0 && <div className="muted">No actions yet.</div>}
         {actions.map((a) => (
