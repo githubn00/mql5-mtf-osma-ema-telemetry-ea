@@ -1,4 +1,4 @@
-﻿:root {
+:root {
   font-family: "Segoe UI", Tahoma, sans-serif;
   background: #edf3fb;
   color: #1c2430;
@@ -12,10 +12,11 @@ body {
   margin: 0;
   background: #edf3fb;
   color: #1c2430;
+  transition: background-color 160ms ease, color 160ms ease;
 }
 
 .layout {
-  max-width: 1200px;
+  width: min(1600px, 100%);
   margin: 16px auto;
   padding: 0 12px 24px;
   display: grid;
@@ -101,6 +102,24 @@ body.dark-page {
   color: #dbe7ff;
 }
 
+.dashboard-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(0, 1fr) 360px;
+  align-items: start;
+}
+
+.main-column,
+.side-column {
+  display: grid;
+  gap: 12px;
+}
+
+.side-column {
+  position: sticky;
+  top: 12px;
+}
+
 .controls-row {
   display: flex;
   gap: 8px;
@@ -149,12 +168,12 @@ body.dark-page {
 
 .chart-root {
   width: 100%;
-  min-height: 380px;
+  min-height: 360px;
 }
 
 .osma-root {
   width: 100%;
-  min-height: 140px;
+  min-height: 160px;
   margin-top: 8px;
 }
 
@@ -196,6 +215,14 @@ td {
 .meta-grid {
   display: grid;
   gap: 6px;
+}
+
+.event-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 10px;
+  font-size: 13px;
+  margin-bottom: 8px;
 }
 
 .buttons {
@@ -260,10 +287,23 @@ button.close {
   border-bottom-color: #1e293b;
 }
 
+@media (max-width: 1200px) {
+  .dashboard-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .side-column {
+    position: static;
+  }
+}
+
 @media (max-width: 800px) {
   .status-row {
     flex-direction: column;
     gap: 4px;
   }
-}
 
+  .event-grid {
+    grid-template-columns: 1fr;
+  }
+}

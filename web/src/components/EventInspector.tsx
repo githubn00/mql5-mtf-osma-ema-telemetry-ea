@@ -1,4 +1,4 @@
-﻿import type { ActionRecord, ChartEvent } from "../types";
+import type { ActionRecord, ChartEvent } from "../types";
 
 interface Props {
   event: ChartEvent | null;
@@ -6,13 +6,37 @@ interface Props {
 }
 
 export function EventInspector({ event, actions }: Props) {
+  const copyEvent = async () => {
+    if (!event) return;
+    await navigator.clipboard.writeText(JSON.stringify(event, null, 2));
+  };
+
   return (
     <section className="panel">
       <div className="panel-head">
         <h3>Event Inspector</h3>
       </div>
       {!event ? <div className="muted">Click a marker/candle to inspect nearest event.</div> : (
-        <pre className="code">{JSON.stringify(event, null, 2)}</pre>
+        <>
+          <div className="event-grid">
+            <div><strong>Type</strong>: {event.type}</div>
+            <div><strong>TF</strong>: {event.tf}</div>
+            <div><strong>Pair</strong>: {event.pair || "-"}</div>
+            <div><strong>Direction</strong>: {event.direction}</div>
+            <div><strong>Time</strong>: {new Date(event.time * 1000).toLocaleString()}</div>
+            <div><strong>Price</strong>: {Number.isFinite(event.price) ? event.price : "-"}</div>
+            <div><strong>Value</strong>: {Number.isFinite(event.value) ? event.value : "-"}</div>
+            <div><strong>Bars Since Prev</strong>: {event.barsSincePrev}</div>
+            <div><strong>Extremum</strong>: {event.extremumType || "-"}</div>
+            <div><strong>Extremum Price</strong>: {Number.isFinite(event.extremumPrice) ? event.extremumPrice : "-"}</div>
+            <div><strong>Extremum Bar</strong>: {Number.isFinite(event.extremumBar) ? event.extremumBar : "-"}</div>
+            <div><strong>Phase</strong>: {event.phase || "-"}</div>
+          </div>
+          <div className="controls-row">
+            <button onClick={() => void copyEvent()}>Copy JSON</button>
+          </div>
+          <pre className="code">{JSON.stringify(event, null, 2)}</pre>
+        </>
       )}
 
       <h4>Recent Actions</h4>
@@ -27,4 +51,3 @@ export function EventInspector({ event, actions }: Props) {
     </section>
   );
 }
-

@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import "./App.css";
 import { ChartPanel } from "./components/ChartPanel";
 import { EventInspector } from "./components/EventInspector";
@@ -10,14 +10,25 @@ import { useTelemetry } from "./hooks/useTelemetry";
 import type { ChartEvent, TfName } from "./types";
 
 const TF_LIST: TfName[] = ["M1", "M5", "M15", "H1", "H4", "D1"];
+const PREF_DARK_KEY = "telemetry_dark_mode";
+const PREF_TF_KEY = "telemetry_tf";
 
 function App() {
   const { state, error } = useTelemetry(1000);
   const { actions, error: actionError, busy, submit } = useActions();
-  const [tf, setTf] = useState<TfName>("M1");
+
+  const [tf, setTf] = useState<TfName>(() => {
+    const saved = window.localStorage.getItem(PREF_TF_KEY);
+    return (TF_LIST.includes(saved as TfName) ? saved : "M1") as TfName;
+  });
   const [selectedEvent, setSelectedEvent] = useState<ChartEvent | null>(null);
   const [toast, setToast] = useState("");
-  const [darkMode, setDarkMode] = useState(false);
+  const [darkMode, setDarkMode] = useState(() => {
+    const saved = window.localStorage.getItem(PREF_DARK_KEY);
+    if (saved === "1") return true;
+    if (saved === "0") return false;
+    return window.matchMedia?.("(prefers-color-scheme: dark)")?.matches ?? false;
+  });
   const [nowSec, setNowSec] = useState(Math.floor(Date.now() / 1000));
 
   const chartData = (state.live?.chart?.[tf] as any) ?? undefined;
@@ -56,8 +67,14 @@ function App() {
 
   useEffect(() => {
     document.body.classList.toggle("dark-page", darkMode);
+    window.localStorage.setItem(PREF_DARK_KEY, darkMode ? "1" : "0");
     return () => document.body.classList.remove("dark-page");
   }, [darkMode]);
+
+  useEffect(() => {
+    window.localStorage.setItem(PREF_TF_KEY, tf);
+  }, [tf]);
+
   const onAction = async (action: "buy" | "sell" | "close_all") => {
     await submit(action, symbol);
     setToast(`Action ${action.toUpperCase()} accepted`);
@@ -93,25 +110,29 @@ function App() {
         ))}
       </section>
 
-      <ChartPanel
-        tf={tf}
-        data={chartData}
-        onSelectEvent={setSelectedEvent}
-        darkMode={darkMode}
-        onToggleDarkMode={() => setDarkMode((v) => !v)}
-        bid={state.live?.quote?.bid}
-        ask={state.live?.quote?.ask}
-        spreadPoints={state.live?.quote?.spreadPoints}
-        countdown={countdown}
-      />
-      <SignalPanel state={state} />
-      <TelemetryTable state={state} />
-      <TradePanel symbol={symbol} busy={busy} onAction={onAction} />
-      <EventInspector event={selectedEvent} actions={actions} />
+      <div className="dashboard-grid">
+        <div className="main-column">
+          <ChartPanel
+            tf={tf}
+            data={chartData}
+            onSelectEvent={setSelectedEvent}
+            darkMode={darkMode}
+            onToggleDarkMode={() => setDarkMode((v) => !v)}
+            bid={state.live?.quote?.bid}
+            ask={state.live?.quote?.ask}
+            spreadPoints={state.live?.quote?.spreadPoints}
+            countdown={countdown}
+          />
+          <TelemetryTable state={state} />
+        </div>
+        <div className="side-column">
+          <SignalPanel state={state} />
+          <TradePanel symbol={symbol} busy={busy} onAction={onAction} />
+          <EventInspector event={selectedEvent} actions={actions} />
+        </div>
+      </div>
     </main>
   );
 }
 
 export default App;
-
-

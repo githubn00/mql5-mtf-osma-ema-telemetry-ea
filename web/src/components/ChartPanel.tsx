@@ -1,5 +1,5 @@
-﻿import { useEffect, useMemo, useRef, useState } from "react";
-import { ColorType, CrosshairMode, LineStyle, createChart } from "lightweight-charts";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ColorType, CrosshairMode, LineStyle, PriceScaleMode, createChart } from "lightweight-charts";
 import type { ChartEvent, ChartTfData, TfName } from "../types";
 
 interface Props {
@@ -26,6 +26,10 @@ interface CrosshairValues {
   values: Partial<Record<IndicatorKey, number>>;
 }
 
+const INDICATOR_PREF_KEY = "telemetry_indicator_visible";
+const MARKER_PREF_KEY = "telemetry_marker_visible";
+const FOLLOW_PREF_KEY = "telemetry_follow_latest";
+
 function nearestEvent(events: ChartEvent[], time: number, price?: number) {
   if (!events.length) return null;
   let best: ChartEvent | null = null;
@@ -41,6 +45,20 @@ function nearestEvent(events: ChartEvent[], time: number, price?: number) {
     }
   }
   return best;
+}
+
+function loadVisibilityPref<T extends string>(storageKey: string, keys: T[], defaults: Record<T, boolean>) {
+  try {
+    const raw = window.localStorage.getItem(storageKey);
+    if (!raw) return defaults;
+    const parsed = JSON.parse(raw) as Record<T, boolean>;
+    return keys.reduce((acc, key) => {
+      acc[key] = typeof parsed[key] === "boolean" ? parsed[key] : defaults[key];
+      return acc;
+    }, {} as Record<T, boolean>);
+  } catch {
+    return defaults;
+  }
 }
 
 export function ChartPanel({ tf, data, onSelectEvent, darkMode, onToggleDarkMode, bid, ask, spreadPoints, countdown }: Props) {
@@ -64,21 +82,30 @@ export function ChartPanel({ tf, data, onSelectEvent, darkMode, onToggleDarkMode
   const syncingRangeRef = useRef(false);
 
   const [crosshair, setCrosshair] = useState<CrosshairValues | null>(null);
-  const [indicatorVisible, setIndicatorVisible] = useState<Record<IndicatorKey, boolean>>({
-    ema13: true,
-    ema34: true,
-    ema150: true,
-    ema200: true,
-    sma2: true,
-    sma5: true,
-    osma: true,
-  });
-  const [markerVisible, setMarkerVisible] = useState<Record<MarkerKey, boolean>>({
-    cross: true,
-    extremum: true,
-    osma_zero: true,
-    signal: true,
-  });
+  const [showCrosshairPanel, setShowCrosshairPanel] = useState(true);
+  const [showGrid, setShowGrid] = useState(true);
+  const [followLatest, setFollowLatest] = useState(() => window.localStorage.getItem(FOLLOW_PREF_KEY) === "1");
+
+  const [indicatorVisible, setIndicatorVisible] = useState<Record<IndicatorKey, boolean>>(() =>
+    loadVisibilityPref(INDICATOR_PREF_KEY, ["ema13", "ema34", "ema150", "ema200", "sma2", "sma5", "osma"], {
+      ema13: true,
+      ema34: true,
+      ema150: true,
+      ema200: true,
+      sma2: true,
+      sma5: true,
+      osma: true,
+    })
+  );
+
+  const [markerVisible, setMarkerVisible] = useState<Record<MarkerKey, boolean>>(() =>
+    loadVisibilityPref(MARKER_PREF_KEY, ["cross", "extremum", "osma_zero", "signal"], {
+      cross: true,
+      extremum: true,
+      osma_zero: true,
+      signal: true,
+    })
+  );
 
   const bars = useMemo(
     () =>
@@ -93,13 +120,29 @@ export function ChartPanel({ tf, data, onSelectEvent, darkMode, onToggleDarkMode
   );
 
   useEffect(() => {
+    window.localStorage.setItem(INDICATOR_PREF_KEY, JSON.stringify(indicatorVisible));
+  }, [indicatorVisible]);
+
+  useEffect(() => {
+    window.localStorage.setItem(MARKER_PREF_KEY, JSON.stringify(markerVisible));
+  }, [markerVisible]);
+
+  useEffect(() => {
+    window.localStorage.setItem(FOLLOW_PREF_KEY, followLatest ? "1" : "0");
+  }, [followLatest]);
+
+  useEffect(() => {
     if (!priceRootRef.current || !osmaRootRef.current || priceChartRef.current || osmaChartRef.current) return;
 
     const baseOptions = {
       crosshair: { mode: CrosshairMode.Normal },
-      rightPriceScale: { borderColor: "#d6dce5" },
-      timeScale: { borderColor: "#d6dce5", timeVisible: true, secondsVisible: false },
+      rightPriceScale: { borderColor: "#d6dce5", mode: PriceScaleMode.Normal, autoScale: true },
+      timeScale: { borderColor: "#d6dce5", timeVisible: true, secondsVisible: false, rightOffset: 3 },
       grid: { vertLines: { color: "#eef2f7" }, horzLines: { color: "#eef2f7" } },
+      handleScroll: { mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: true },
+      handleScale: { axisPressedMouseMove: true, mouseWheel: true, pinch: true },
+      trackingMode: { exitMode: 1 as const },
+      kineticScroll: { mouse: true, touch: true },
     };
 
     const priceChart = createChart(priceRootRef.current, {
@@ -109,7 +152,7 @@ export function ChartPanel({ tf, data, onSelectEvent, darkMode, onToggleDarkMode
         textColor: "#1f2937",
       },
       width: priceRootRef.current.clientWidth,
-      height: 340,
+      height: 360,
     });
 
     const osmaChart = createChart(osmaRootRef.current, {
@@ -119,7 +162,7 @@ export function ChartPanel({ tf, data, onSelectEvent, darkMode, onToggleDarkMode
         textColor: "#1f2937",
       },
       width: osmaRootRef.current.clientWidth,
-      height: 140,
+      height: 160,
     });
 
     const candle = priceChart.addCandlestickSeries({
@@ -128,6 +171,8 @@ export function ChartPanel({ tf, data, onSelectEvent, darkMode, onToggleDarkMode
       wickUpColor: "#16a34a",
       wickDownColor: "#dc2626",
       borderVisible: false,
+      priceLineVisible: false,
+      lastValueVisible: false,
     });
 
     const makeLine = (key: Exclude<IndicatorKey, "osma">, color: string, width = 2, style = LineStyle.Solid) => {
@@ -219,6 +264,7 @@ export function ChartPanel({ tf, data, onSelectEvent, darkMode, onToggleDarkMode
       }
     };
     window.addEventListener("resize", onResize);
+    document.addEventListener("fullscreenchange", onResize);
 
     priceChartRef.current = priceChart;
     osmaChartRef.current = osmaChart;
@@ -227,6 +273,7 @@ export function ChartPanel({ tf, data, onSelectEvent, darkMode, onToggleDarkMode
 
     return () => {
       window.removeEventListener("resize", onResize);
+      document.removeEventListener("fullscreenchange", onResize);
       priceChart.unsubscribeClick(handleClick);
       priceChart.unsubscribeCrosshairMove(handleCrosshair);
       osmaChart.unsubscribeCrosshairMove(handleCrosshair);
@@ -287,19 +334,28 @@ export function ChartPanel({ tf, data, onSelectEvent, darkMode, onToggleDarkMode
         shape: ev.type === "extremum" ? "circle" : ev.direction > 0 ? "arrowUp" : "arrowDown",
         text: "",
       }));
-
     candleRef.current.setMarkers(markers as any);
 
     const tfChanged = prevTfRef.current !== tf;
     prevTfRef.current = tf;
+
     if (!didInitialFitRef.current || tfChanged) {
       priceChartRef.current.timeScale().fitContent();
+      osmaChartRef.current.timeScale().fitContent();
+      priceChartRef.current.priceScale("right").applyOptions({ autoScale: true, mode: PriceScaleMode.Normal });
+      osmaChartRef.current.priceScale("right").applyOptions({ autoScale: true, mode: PriceScaleMode.Normal });
       didInitialFitRef.current = true;
+      return;
+    }
+
+    if (followLatest) {
+      priceChartRef.current.timeScale().scrollToRealTime();
+      osmaChartRef.current.timeScale().scrollToRealTime();
     } else if (visible) {
       priceChartRef.current.timeScale().setVisibleLogicalRange(visible);
       osmaChartRef.current.timeScale().setVisibleLogicalRange(visible);
     }
-  }, [bars, data, tf, markerVisible]);
+  }, [bars, data, tf, markerVisible, followLatest]);
 
   useEffect(() => {
     if (typeof bid === "number" && bid > 0) {
@@ -359,8 +415,8 @@ export function ChartPanel({ tf, data, onSelectEvent, darkMode, onToggleDarkMode
         rightPriceScale: { borderColor: darkMode ? "#334155" : "#d6dce5" },
         timeScale: { borderColor: darkMode ? "#334155" : "#d6dce5", timeVisible: true, secondsVisible: false },
         grid: {
-          vertLines: { color: darkMode ? "#1e293b" : "#eef2f7" },
-          horzLines: { color: darkMode ? "#1e293b" : "#eef2f7" },
+          vertLines: { color: showGrid ? (darkMode ? "#1e293b" : "#eef2f7") : "transparent" },
+          horzLines: { color: showGrid ? (darkMode ? "#1e293b" : "#eef2f7") : "transparent" },
         },
       });
     };
@@ -377,7 +433,7 @@ export function ChartPanel({ tf, data, onSelectEvent, darkMode, onToggleDarkMode
     if (osmaSeriesRef.current) {
       osmaSeriesRef.current.applyOptions({ visible: indicatorVisible.osma });
     }
-  }, [darkMode, indicatorVisible]);
+  }, [darkMode, indicatorVisible, showGrid]);
 
   const toggleIndicator = (k: IndicatorKey) => {
     setIndicatorVisible((p) => ({ ...p, [k]: !p[k] }));
@@ -406,7 +462,10 @@ export function ChartPanel({ tf, data, onSelectEvent, darkMode, onToggleDarkMode
       </div>
 
       <div className="controls-row">
-        <button onClick={() => priceChartRef.current?.timeScale().fitContent()}>Reset Zoom</button>
+        <button onClick={() => { priceChartRef.current?.timeScale().fitContent(); osmaChartRef.current?.timeScale().fitContent(); }}>Reset Zoom</button>
+        <button className={followLatest ? "active" : ""} onClick={() => setFollowLatest((v) => !v)}>Follow Live</button>
+        <button className={showGrid ? "active" : ""} onClick={() => setShowGrid((v) => !v)}>Grid</button>
+        <button className={showCrosshairPanel ? "active" : ""} onClick={() => setShowCrosshairPanel((v) => !v)}>OHLC Strip</button>
         <button onClick={onToggleDarkMode}>{darkMode ? "Light" : "Dark"}</button>
         <button onClick={() => void toggleFullscreen()}>Fullscreen</button>
         <span className="quote-chip">Bid: {typeof bid === "number" ? bid.toFixed(2) : "-"}</span>
@@ -431,16 +490,18 @@ export function ChartPanel({ tf, data, onSelectEvent, darkMode, onToggleDarkMode
         ))}
       </div>
 
-      <div className="crosshair-panel">
-        <span>T: {crosshair?.time ? new Date(crosshair.time * 1000).toLocaleString() : "-"}</span>
-        <span>O: {fmt(crosshair?.open, 2)}</span>
-        <span>H: {fmt(crosshair?.high, 2)}</span>
-        <span>L: {fmt(crosshair?.low, 2)}</span>
-        <span>C: {fmt(crosshair?.close, 2)}</span>
-        <span>EMA13: {fmt(crosshair?.values.ema13, 4)}</span>
-        <span>EMA34: {fmt(crosshair?.values.ema34, 4)}</span>
-        <span>OSMA: {fmt(crosshair?.values.osma, 4)}</span>
-      </div>
+      {showCrosshairPanel && (
+        <div className="crosshair-panel">
+          <span>T: {crosshair?.time ? new Date(crosshair.time * 1000).toLocaleString() : "-"}</span>
+          <span>O: {fmt(crosshair?.open, 2)}</span>
+          <span>H: {fmt(crosshair?.high, 2)}</span>
+          <span>L: {fmt(crosshair?.low, 2)}</span>
+          <span>C: {fmt(crosshair?.close, 2)}</span>
+          <span>EMA13: {fmt(crosshair?.values.ema13, 4)}</span>
+          <span>EMA34: {fmt(crosshair?.values.ema34, 4)}</span>
+          <span>OSMA: {fmt(crosshair?.values.osma, 4)}</span>
+        </div>
+      )}
 
       <div ref={priceRootRef} className="chart-root" />
       <div ref={osmaRootRef} className="osma-root" />
