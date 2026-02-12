@@ -27,6 +27,12 @@ body {
   padding: 12px;
 }
 
+.panel-dark {
+  background: #0f172a;
+  border-color: #334155;
+  color: #dbe7ff;
+}
+
 .hero h1 {
   margin: 0 0 8px;
 }
@@ -65,6 +71,27 @@ body {
   border-color: #0057b8;
 }
 
+.controls-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.controls-row button {
+  border: 1px solid #c8d5e8;
+  background: #f4f8ff;
+  padding: 6px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.controls-row button.active {
+  background: #0057b8;
+  color: #fff;
+  border-color: #0057b8;
+}
+
 .panel-head {
   display: flex;
   justify-content: space-between;
@@ -79,6 +106,15 @@ body {
 .chart-root {
   width: 100%;
   min-height: 380px;
+}
+
+.crosshair-panel {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 12px;
+  color: #6a7b92;
+  margin-bottom: 8px;
 }
 
 .table-wrap {
