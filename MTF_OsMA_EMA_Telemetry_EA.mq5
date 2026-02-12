@@ -188,6 +188,7 @@ input double InpNearCrossThresholdPoints = 80.0;
 input int InpConvergenceBars = 3;
 input int InpProjectionHorizonBars = 1;
 input string InpJsonFile = "ea_multitf_state.json";
+input int InpChartHistoryBars = 500;
 input bool InpJsonUseCommonFolder = true;
 input bool InpEnableHttpTelemetry = false;
 input string InpTelemetryUrl = "http://127.0.0.1:8765/api/telemetry";
@@ -1727,6 +1728,193 @@ string BuildBarStatsJson(const BarStats &b)
    s += "\"close\":" + DoubleToString(b.prev_close, _Digits);
    s += "}";
    s += "}";
+  return s;
+  }
+
+int EffectiveChartHistoryBars()
+  {
+   if(InpChartHistoryBars < 50)
+      return 50;
+   if(InpChartHistoryBars > 2000)
+      return 2000;
+   return InpChartHistoryBars;
+  }
+
+string BuildChartBarsJson(int tf_idx, int &exported)
+  {
+   int want = EffectiveChartHistoryBars();
+   MqlRates rates[];
+   if(!LoadRates(g_tfs[tf_idx].tf, want, rates))
+     {
+      exported = 0;
+      return "[]";
+     }
+
+   int got = ArraySize(rates);
+   if(got <= 0)
+     {
+      exported = 0;
+      return "[]";
+     }
+
+   exported = got;
+   string s = "[";
+   bool first = true;
+   for(int i = got - 1; i >= 0; i--)
+     {
+      if(!first) s += ",";
+      first = false;
+      s += "{";
+      s += "\"time\":" + TimeToJson(rates[i].time) + ",";
+      s += "\"open\":" + DoubleToString(rates[i].open, _Digits) + ",";
+      s += "\"high\":" + DoubleToString(rates[i].high, _Digits) + ",";
+      s += "\"low\":" + DoubleToString(rates[i].low, _Digits) + ",";
+      s += "\"close\":" + DoubleToString(rates[i].close, _Digits) + ",";
+      s += "\"tickVolume\":" + IntegerToString((int)rates[i].tick_volume);
+      s += "}";
+     }
+   s += "]";
+   return s;
+  }
+
+string BuildIndicatorSeriesJsonByHandle(int handle, int tf_idx, int max_points)
+  {
+   if(handle == INVALID_HANDLE)
+      return "[]";
+
+   int want = EffectiveChartHistoryBars();
+   int count = MathMin(max_points, want);
+   if(count <= 0)
+      return "[]";
+
+   MqlRates rates[];
+   if(!LoadRates(g_tfs[tf_idx].tf, count, rates))
+      return "[]";
+
+   double vals[];
+   if(!LoadBuffer(handle, count, vals))
+      return "[]";
+
+   int got = MathMin(ArraySize(rates), ArraySize(vals));
+   if(got <= 0)
+      return "[]";
+
+   string s = "[";
+   bool first = true;
+   for(int i = got - 1; i >= 0; i--)
+     {
+      if(!first) s += ",";
+      first = false;
+      s += "{";
+      s += "\"time\":" + TimeToJson(rates[i].time) + ",";
+      s += "\"value\":" + DoubleToString(vals[i], 8);
+      s += "}";
+     }
+   s += "]";
+   return s;
+  }
+
+string BuildChartEventsJson(int tf_idx)
+  {
+   string s = "[";
+   bool first = true;
+
+   int cross_start = MathMax(0, g_tfs[tf_idx].cross_count - 40);
+   for(int i = cross_start; i < g_tfs[tf_idx].cross_count; i++)
+     {
+      CrossEvent ev = g_tfs[tf_idx].cross_events[i];
+      if(!first) s += ",";
+      first = false;
+      s += "{";
+      s += "\"id\":\"cross-" + IntegerToString(i) + "-" + JsonEscape(g_tfs[tf_idx].tf_name) + "\",";
+      s += "\"time\":" + TimeToJson(ev.t) + ",";
+      s += "\"type\":\"cross\",";
+      s += "\"tf\":\"" + g_tfs[tf_idx].tf_name + "\",";
+      s += "\"pair\":\"" + JsonEscape(ev.pair) + "\",";
+      s += "\"direction\":" + IntegerToString(ev.direction) + ",";
+      s += "\"price\":" + DoubleToString(ev.price, _Digits) + ",";
+      s += "\"value\":" + DoubleToString(ev.price, _Digits) + ",";
+      s += "\"barsSincePrev\":" + IntegerToString(ev.bars_since_prev) + ",";
+      s += "\"phase\":\"" + PhaseToString(g_tfs[tf_idx].state.phase) + "\",";
+      s += "\"extremumType\":\"" + JsonEscape(ev.extremum_type) + "\",";
+      s += "\"extremumPrice\":" + DoubleToString(ev.extremum_price, _Digits) + ",";
+      s += "\"extremumBar\":" + IntegerToString(ExtremumBarShift(tf_idx, ev.extremum_t));
+      s += "}";
+
+      if(ev.has_extremum)
+        {
+         s += ",";
+         s += "{";
+         s += "\"id\":\"extremum-" + IntegerToString(i) + "-" + JsonEscape(g_tfs[tf_idx].tf_name) + "\",";
+         s += "\"time\":" + TimeToJson(ev.extremum_t) + ",";
+         s += "\"type\":\"extremum\",";
+         s += "\"tf\":\"" + g_tfs[tf_idx].tf_name + "\",";
+         s += "\"pair\":\"" + JsonEscape(ev.pair) + "\",";
+         s += "\"direction\":" + IntegerToString(ev.direction) + ",";
+         s += "\"price\":" + DoubleToString(ev.extremum_price, _Digits) + ",";
+         s += "\"value\":" + DoubleToString(ev.extremum_price, _Digits) + ",";
+         s += "\"barsSincePrev\":" + IntegerToString(ev.bars_since_prev) + ",";
+         s += "\"phase\":\"" + PhaseToString(g_tfs[tf_idx].state.phase) + "\",";
+         s += "\"extremumType\":\"" + JsonEscape(ev.extremum_type) + "\",";
+         s += "\"extremumPrice\":" + DoubleToString(ev.extremum_price, _Digits) + ",";
+         s += "\"extremumBar\":" + IntegerToString(ExtremumBarShift(tf_idx, ev.extremum_t));
+         s += "}";
+        }
+     }
+
+   int osma_start = MathMax(0, g_tfs[tf_idx].osma_count - 40);
+   for(int i = osma_start; i < g_tfs[tf_idx].osma_count; i++)
+     {
+      OsmaEvent ev = g_tfs[tf_idx].osma_events[i];
+      if(ev.event_type != "zero_cross")
+         continue;
+
+      if(!first) s += ",";
+      first = false;
+      s += "{";
+      s += "\"id\":\"osma-zero-" + IntegerToString(i) + "-" + JsonEscape(g_tfs[tf_idx].tf_name) + "\",";
+      s += "\"time\":" + TimeToJson(ev.t) + ",";
+      s += "\"type\":\"osma_zero\",";
+      s += "\"tf\":\"" + g_tfs[tf_idx].tf_name + "\",";
+      s += "\"pair\":\"OSMA_ZERO\",";
+      s += "\"direction\":" + IntegerToString(ev.direction) + ",";
+      s += "\"price\":" + DoubleToString(ev.price, _Digits) + ",";
+      s += "\"value\":" + DoubleToString(ev.value, 8) + ",";
+      s += "\"barsSincePrev\":" + IntegerToString(ev.bars_since_prev) + ",";
+      s += "\"phase\":\"" + PhaseToString(g_tfs[tf_idx].state.phase) + "\",";
+      s += "\"extremumType\":\"" + JsonEscape(ev.extremum_type) + "\",";
+      s += "\"extremumPrice\":" + DoubleToString(ev.extremum_price, _Digits) + ",";
+      s += "\"extremumBar\":" + IntegerToString(ExtremumBarShift(tf_idx, ev.extremum_t));
+      s += "}";
+     }
+
+   s += "]";
+   return s;
+  }
+
+string BuildLiveChartTfJson(int tf_idx)
+  {
+   int exported = 0;
+   string bars_json = BuildChartBarsJson(tf_idx, exported);
+   int series_points = MathMax(50, exported);
+
+   string s = "{";
+   s += "\"timeframe\":\"" + g_tfs[tf_idx].tf_name + "\",";
+   s += "\"historyBarsExported\":" + IntegerToString(exported) + ",";
+   s += "\"historyBarsMax\":" + IntegerToString(EffectiveChartHistoryBars()) + ",";
+   s += "\"bars\":" + bars_json + ",";
+   s += "\"indicators\":{";
+   s += "\"ema13\":" + BuildIndicatorSeriesJsonByHandle(g_tfs[tf_idx].ma_handles[MA_EMA13], tf_idx, series_points) + ",";
+   s += "\"ema34\":" + BuildIndicatorSeriesJsonByHandle(g_tfs[tf_idx].ma_handles[MA_EMA34], tf_idx, series_points) + ",";
+   s += "\"ema150\":" + BuildIndicatorSeriesJsonByHandle(g_tfs[tf_idx].ma_handles[MA_EMA150], tf_idx, series_points) + ",";
+   s += "\"ema200\":" + BuildIndicatorSeriesJsonByHandle(g_tfs[tf_idx].ma_handles[MA_EMA200], tf_idx, series_points) + ",";
+   s += "\"sma2\":" + BuildIndicatorSeriesJsonByHandle(g_tfs[tf_idx].ma_handles[MA_SMA2], tf_idx, series_points) + ",";
+   s += "\"sma5\":" + BuildIndicatorSeriesJsonByHandle(g_tfs[tf_idx].ma_handles[MA_SMA5], tf_idx, series_points) + ",";
+   s += "\"osma\":" + BuildIndicatorSeriesJsonByHandle(g_tfs[tf_idx].osma_handle, tf_idx, series_points);
+   s += "},";
+   s += "\"events\":" + BuildChartEventsJson(tf_idx);
+   s += "}";
+
    return s;
   }
 
@@ -1900,6 +2088,15 @@ string BuildStateJson()
    json += "\"low\":" + DoubleToString(g_tfs[0].state.bars.curr_low, _Digits) + ",";
    json += "\"close\":" + DoubleToString(g_tfs[0].state.bars.curr_close, _Digits);
    json += "}";
+   json += "}";
+
+   json += ",";
+   json += "\"chart\":{";
+   for(int tfi = 0; tfi < TF_COUNT; tfi++)
+     {
+      if(tfi > 0) json += ",";
+      json += "\"" + g_tfs[tfi].tf_name + "\":" + BuildLiveChartTfJson(tfi);
+     }
    json += "}";
 
    json += "},";

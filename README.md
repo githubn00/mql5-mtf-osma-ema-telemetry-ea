@@ -124,17 +124,24 @@ Applied only when position comment contains `SCALP` and `InpEnableScalpRules=tru
 
 ## External dashboard (HTTP push)
 
-This repo includes `dashboard_server.py`, a local HTTP receiver + browser dashboard.
+This repo includes:
+
+- `dashboard_server.py` (telemetry API + static web server + action API)
+- `web/` (React + TypeScript UI using `lightweight-charts`)
 
 ### 1. Start dashboard server
 
 From repo root:
 
 ```bash
+cd web
+npm install
+npm run build
+cd ..
 python dashboard_server.py
 ```
 
-It listens on `http://127.0.0.1:8765`.
+It listens on `http://127.0.0.1:8765` and serves `web/dist` if present (fallbacks to a legacy HTML message if not).
 
 Open this in a browser:
 
@@ -173,6 +180,7 @@ Set:
 - `InpEnableHttpTelemetry = true`
 - `InpTelemetryUrl = "http://127.0.0.1:8765/api/telemetry"`
 - `InpJsonUseCommonFolder = true` (recommended so tester/live write to same shared file)
+- `InpChartHistoryBars = 500` (default chart history exported per timeframe)
 - optional: `InpTelemetryTimeoutMs`, `InpTelemetryMinIntervalMs`
 
 ### 3. MT5 terminal setting required
@@ -192,6 +200,16 @@ Notes:
 - Debug source selection via `http://127.0.0.1:8765/api/state` fields:
 - `_source`, `_selectedFile`, `_stateUpdatedAt`, `_fileUpdatedAt`, `_httpUpdatedAt`, `_fileMtime`.
 
+### Trade action API (signal-only)
+
+UI trade buttons call backend action endpoints (no broker execution from web app):
+
+- `POST /api/actions` with payload:
+  - `{"action":"buy|sell|close_all","symbol":"BTCUSD#","source":"web_ui","ts":1730000000000,"meta":{}}`
+- `GET /api/actions?limit=50` returns recent action log entries.
+
+Actions are persisted to `action_log.jsonl`.
+
 ## JSON Structure (`InpJsonFile`)
 
 Top-level keys:
@@ -209,7 +227,13 @@ Top-level keys:
   - `direction`, `phase`, `directionStabilized`
   - `ema1334AboutScore`, `osmaAboutScore`
   - `barsAfterCross1334`, `barsAfterCross150200`
+  - `extremum1334`, `extremumBar1334`
   - `barPosVsMAs`
+- `chart` by timeframe:
+  - `historyBarsExported`, `historyBarsMax`
+  - `bars[]` (`time,open,high,low,close,tickVolume`)
+  - `indicators` (`ema13,ema34,ema150,ema200,sma2,sma5,osma`)
+  - `events[]` (interactive event objects for chart tooltips/inspection)
 - `signals`
   - `aligned` (raw counts)
   - `strong` (thresholded by `InpMinAlignedTF`)

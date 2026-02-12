@@ -1,0 +1,165 @@
+﻿:root {
+  font-family: "Segoe UI", Tahoma, sans-serif;
+  background: #edf3fb;
+  color: #1c2430;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+.layout {
+  max-width: 1200px;
+  margin: 16px auto;
+  padding: 0 12px 24px;
+  display: grid;
+  gap: 12px;
+}
+
+.panel {
+  background: #fff;
+  border: 1px solid #dbe5f2;
+  border-radius: 12px;
+  padding: 12px;
+}
+
+.hero h1 {
+  margin: 0 0 8px;
+}
+
+.status-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+
+.chip {
+  border: 1px solid #c8d5e8;
+  border-radius: 20px;
+  padding: 2px 10px;
+  font-size: 12px;
+}
+
+.tfbar {
+  display: flex;
+  gap: 8px;
+}
+
+.tfbar button,
+.buttons button {
+  border: 1px solid #c8d5e8;
+  background: #f4f8ff;
+  padding: 7px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.tfbar button.active {
+  background: #0057b8;
+  color: #fff;
+  border-color: #0057b8;
+}
+
+.panel-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.panel-head h3 {
+  margin: 0;
+}
+
+.chart-root {
+  width: 100%;
+  min-height: 380px;
+}
+
+.table-wrap {
+  overflow-x: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+th,
+td {
+  border-bottom: 1px solid #e4ebf5;
+  text-align: left;
+  padding: 6px;
+}
+
+.meta-grid {
+  display: grid;
+  gap: 6px;
+}
+
+.buttons {
+  display: flex;
+  gap: 8px;
+}
+
+button.buy {
+  background: #dff5e8;
+}
+
+button.sell {
+  background: #ffe5e5;
+}
+
+button.close {
+  background: #fff2dd;
+}
+
+.muted {
+  color: #6a7b92;
+}
+
+.error {
+  color: #b91c1c;
+  font-size: 13px;
+}
+
+.toast {
+  color: #0c7a43;
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.code {
+  max-height: 260px;
+  overflow: auto;
+  background: #0b1220;
+  color: #e3edff;
+  border-radius: 8px;
+  padding: 8px;
+  font-size: 12px;
+}
+
+.actions-list {
+  display: grid;
+  gap: 4px;
+  max-height: 150px;
+  overflow-y: auto;
+}
+
+.action-item {
+  border-bottom: 1px solid #edf2f9;
+  padding: 4px 0;
+}
+
+@media (max-width: 800px) {
+  .status-row {
+    flex-direction: column;
+    gap: 4px;
+  }
+}
