@@ -33,6 +33,9 @@ interface MarkerMeta {
   description: string;
 }
 
+type MarkerPosition = "aboveBar" | "belowBar" | "inBar";
+type MarkerShape = "circle" | "arrowUp" | "arrowDown";
+
 const INDICATOR_PREF_KEY = "telemetry_indicator_visible";
 const MARKER_PREF_KEY = "telemetry_marker_visible";
 const FOLLOW_PREF_KEY = "telemetry_follow_latest";
@@ -54,6 +57,24 @@ const MARKER_META: Record<MarkerKey, MarkerMeta> = {
   osma_zero: { short: "ZC", name: "Zero Cross", description: "OsMA crossed zero line" },
   signal: { short: "SG", name: "Signal", description: "Strategy signal emitted" },
 };
+
+function toFiniteNumber(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim() !== "") {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
+}
+
+function normalizeExtremumType(value: unknown): "peak" | "bottom" | "" {
+  if (typeof value !== "string") return "";
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return "";
+  if (normalized.includes("peak") || normalized.includes("top") || normalized.includes("high")) return "peak";
+  if (normalized.includes("bottom") || normalized.includes("low") || normalized.includes("trough")) return "bottom";
+  return "";
+}
 
 function nearestEvent(events: ChartEvent[], time: number, price?: number) {
   if (!events.length) return null;
@@ -374,18 +395,107 @@ export function ChartPanel({ tf, data, onSelectEvent, darkMode, onToggleDarkMode
       }));
     osmaSeriesRef.current.setData(osmaMapped);
 
-    const markers = (data?.events ?? [])
-      .filter((ev) => markerVisible[(ev.type as MarkerKey) ?? "cross"] ?? true)
-      .map((ev) => {
-        const markerType = (ev.type as MarkerKey) ?? "cross";
-        return {
-          time: ev.time as any,
-          position: ev.direction > 0 ? "belowBar" : "aboveBar",
-          color: ev.direction > 0 ? "#22ab94" : "#f23645",
-          shape: markerType === "extremum" ? "circle" : ev.direction > 0 ? "arrowUp" : "arrowDown",
-          text: MARKER_META[markerType].short,
-        };
-      });
+    const chartEvents = data?.events ?? [];
+    const barTimes = bars
+      .map((b) => Number(b.time))
+      .filter((t) => Number.isFinite(t) && t > 0);
+
+    const resolveNearestBarTime = (target: number): number => {
+      if (!barTimes.length || !Number.isFinite(target) || target <= 0) return target;
+      let nearest = barTimes[0];
+      let bestDelta = Math.abs(nearest - target);
+      for (let i = 1; i < barTimes.length; i += 1) {
+        const candidate = barTimes[i];
+        const delta = Math.abs(candidate - target);
+        if (delta < bestDelta) {
+          nearest = candidate;
+          bestDelta = delta;
+        }
+      }
+      return nearest;
+    };
+
+    const resolveExtremumTime = (ev: ChartEvent): number => {
+      const meta = (ev.meta && typeof ev.meta === "object") ? (ev.meta as Record<string, unknown>) : undefined;
+      const explicitTime =
+        toFiniteNumber(meta?.extremumTime)
+        ?? toFiniteNumber(meta?.extremum_t)
+        ?? toFiniteNumber((ev as unknown as Record<string, unknown>).extremumTime)
+        ?? toFiniteNumber((ev as unknown as Record<string, unknown>).extremum_t);
+      if (explicitTime && explicitTime > 0) return resolveNearestBarTime(explicitTime);
+
+      const barAgo = Math.trunc(ev.extremumBar ?? -1);
+      if (barAgo >= 0 && barAgo < bars.length) {
+        const idx = bars.length - 1 - barAgo;
+        if (idx >= 0 && idx < bars.length) {
+          return Number(bars[idx].time);
+        }
+      }
+
+      return resolveNearestBarTime(ev.time);
+    };
+
+    const dedupe = new Set<string>();
+    const markers: Array<{
+      time: any;
+      position: MarkerPosition;
+      color: string;
+      shape: MarkerShape;
+      text: string;
+      size: number;
+    }> = [];
+
+    const pushMarker = (
+      time: number,
+      position: MarkerPosition,
+      color: string,
+      shape: MarkerShape,
+      text: string,
+      size = 2
+    ) => {
+      if (!Number.isFinite(time) || time <= 0) return;
+      const key = `${time}|${position}|${shape}|${text}`;
+      if (dedupe.has(key)) return;
+      dedupe.add(key);
+      markers.push({ time: time as any, position, color, shape, text, size });
+    };
+
+    for (const ev of chartEvents) {
+      const meta = (ev.meta && typeof ev.meta === "object") ? (ev.meta as Record<string, unknown>) : undefined;
+      const extremumType =
+        normalizeExtremumType(ev.extremumType)
+        || normalizeExtremumType(meta?.extremumType)
+        || normalizeExtremumType(meta?.extremum_type)
+        || normalizeExtremumType(meta?.type);
+      const hasExtremum = ev.type === "extremum" || extremumType !== "";
+
+      if (markerVisible.extremum && hasExtremum) {
+        const isPeak = (extremumType || (ev.direction < 0 ? "peak" : "bottom")) === "peak";
+        pushMarker(
+          resolveExtremumTime(ev),
+          isPeak ? "aboveBar" : "belowBar",
+          isPeak ? "#f59e0b" : "#22ab94",
+          "circle",
+          isPeak ? "EXH" : "EXL",
+          3
+        );
+      }
+
+      if (ev.type === "extremum") continue;
+      if (!markerVisible[ev.type]) continue;
+
+      // If a cross event carries extremum info, avoid stacking CR and EX labels on the same bar.
+      if (ev.type === "cross" && hasExtremum && markerVisible.extremum) continue;
+
+      pushMarker(
+        resolveNearestBarTime(ev.time),
+        ev.direction > 0 ? "belowBar" : "aboveBar",
+        ev.direction > 0 ? "#22ab94" : "#f23645",
+        ev.direction > 0 ? "arrowUp" : "arrowDown",
+        MARKER_META[ev.type].short
+      );
+    }
+
     candleRef.current.setMarkers(markers as any);
 
     const tfChanged = prevTfRef.current !== tf;
@@ -553,7 +663,7 @@ export function ChartPanel({ tf, data, onSelectEvent, darkMode, onToggleDarkMode
 
       <div className="overlay-help">
         <Info size={12} className="icon" />
-        Marker codes on candles: `CR` = Cross, `EX` = Extremum, `ZC` = OsMA Zero Cross, `SG` = Strategy Signal.
+        Marker codes on candles: `CR` = Cross, `EXH` = Extremum High, `EXL` = Extremum Low, `ZC` = OsMA Zero Cross, `SG` = Strategy Signal.
       </div>
 
       {showCrosshairPanel && (
