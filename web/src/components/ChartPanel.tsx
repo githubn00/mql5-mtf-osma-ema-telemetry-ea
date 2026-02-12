@@ -1,11 +1,5 @@
-﻿import { useEffect, useMemo, useRef } from "react";
-import {
-  ColorType,
-  CrosshairMode,
-  
-  LineStyle,
-  createChart,
-} from "lightweight-charts";
+import { useEffect, useMemo, useRef } from "react";
+import { ColorType, CrosshairMode, LineStyle, createChart } from "lightweight-charts";
 import type { ChartEvent, ChartTfData, TfName } from "../types";
 
 interface Props {
@@ -32,8 +26,12 @@ function nearestEvent(events: ChartEvent[], time: number, price?: number) {
 }
 
 export function ChartPanel({ tf, data, onSelectEvent }: Props) {
-  const ref = useRef<HTMLDivElement | null>(null);
+  const rootRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<any>(null);
+  const candleRef = useRef<any>(null);
+  const linesRef = useRef<Record<string, any>>({});
+  const eventsRef = useRef<ChartEvent[]>([]);
+  const didInitialFitRef = useRef(false);
 
   const bars = useMemo(
     () =>
@@ -48,10 +46,14 @@ export function ChartPanel({ tf, data, onSelectEvent }: Props) {
   );
 
   useEffect(() => {
-    if (!ref.current) return;
-    const chart = createChart(ref.current, {
-      layout: { background: { type: ColorType.Solid, color: "#ffffff" }, textColor: "#1f2937" },
-      width: ref.current.clientWidth,
+    if (!rootRef.current || chartRef.current) return;
+
+    const chart = createChart(rootRef.current, {
+      layout: {
+        background: { type: ColorType.Solid, color: "#ffffff" },
+        textColor: "#1f2937",
+      },
+      width: rootRef.current.clientWidth,
       height: 380,
       crosshair: { mode: CrosshairMode.Normal },
       rightPriceScale: { borderColor: "#d6dce5" },
@@ -67,22 +69,76 @@ export function ChartPanel({ tf, data, onSelectEvent }: Props) {
       borderVisible: false,
     });
 
-    candle.setData(bars);
+    const makeLine = (key: string, color: string, width = 2, style = LineStyle.Solid) => {
+      linesRef.current[key] = chart.addLineSeries({
+        color,
+        lineWidth: width as any,
+        lineStyle: style,
+        priceLineVisible: false,
+      });
+    };
+
+    makeLine("ema13", "#2563eb", 2);
+    makeLine("ema34", "#9333ea", 2);
+    makeLine("ema150", "#f59e0b", 1, LineStyle.Dashed);
+    makeLine("ema200", "#ef4444", 1, LineStyle.Dashed);
+    makeLine("sma2", "#0ea5e9", 1);
+    makeLine("sma5", "#14b8a6", 1);
+    makeLine("osma", "#111827", 1);
+
+    chart.subscribeClick((param: any) => {
+      if (!param || !param.time) {
+        onSelectEvent(null);
+        return;
+      }
+      const cp = param.seriesData?.get(candleRef.current);
+      const close = cp?.close;
+      const ev = nearestEvent(eventsRef.current, Number(param.time), close);
+      onSelectEvent(ev);
+    });
+
+    const onResize = () => {
+      if (!rootRef.current || !chartRef.current) return;
+      chartRef.current.applyOptions({ width: rootRef.current.clientWidth });
+    };
+    window.addEventListener("resize", onResize);
+
+    chartRef.current = chart;
+    candleRef.current = candle;
+
+    return () => {
+      window.removeEventListener("resize", onResize);
+      chart.remove();
+      chartRef.current = null;
+      candleRef.current = null;
+      linesRef.current = {};
+    };
+  }, [onSelectEvent]);
+
+  useEffect(() => {
+    if (!chartRef.current || !candleRef.current) return;
+
+    eventsRef.current = data?.events ?? [];
+
+    const visible = chartRef.current.timeScale().getVisibleLogicalRange();
+
+    candleRef.current.setData(bars);
 
     const indicators = data?.indicators;
-    if (indicators) {
-      const addLine = (values: { time: number; value: number }[], color: string, width = 2, style = LineStyle.Solid) => {
-        const s = chart.addLineSeries({ color, lineWidth: width as any, lineStyle: style, priceLineVisible: false });
-        s.setData(values.map((p) => ({ time: p.time as any, value: p.value })));
-      };
+    const setLine = (key: string, points?: { time: number; value: number }[]) => {
+      const s = linesRef.current[key];
+      if (!s) return;
+      const mapped = (points ?? []).map((p) => ({ time: p.time as any, value: p.value }));
+      s.setData(mapped);
+    };
 
-      addLine(indicators.ema13 ?? [], "#2563eb", 2);
-      addLine(indicators.ema34 ?? [], "#9333ea", 2);
-      addLine(indicators.ema150 ?? [], "#f59e0b", 1, LineStyle.Dashed);
-      addLine(indicators.ema200 ?? [], "#ef4444", 1, LineStyle.Dashed);
-      addLine(indicators.sma2 ?? [], "#0ea5e9", 1);
-      addLine(indicators.sma5 ?? [], "#14b8a6", 1);
-    }
+    setLine("ema13", indicators?.ema13);
+    setLine("ema34", indicators?.ema34);
+    setLine("ema150", indicators?.ema150);
+    setLine("ema200", indicators?.ema200);
+    setLine("sma2", indicators?.sma2);
+    setLine("sma5", indicators?.sma5);
+    setLine("osma", indicators?.osma);
 
     const markers = (data?.events ?? []).map((ev) => ({
       time: ev.time as any,
@@ -91,35 +147,15 @@ export function ChartPanel({ tf, data, onSelectEvent }: Props) {
       shape: ev.type === "extremum" ? "circle" : "arrowDown",
       text: ev.type,
     }));
+    candleRef.current.setMarkers(markers as any);
 
-    candle.setMarkers(markers as any);
-
-    chart.subscribeClick((param: any) => {
-      if (!param || !param.time) {
-        onSelectEvent(null);
-        return;
-      }
-      const cp = param.seriesData?.get(candle);
-      const close = cp?.close;
-      const ev = nearestEvent(data?.events ?? [], Number(param.time), close);
-      onSelectEvent(ev);
-    });
-
-    chart.timeScale().fitContent();
-    chartRef.current = chart;
-
-    const onResize = () => {
-      if (!ref.current || !chartRef.current) return;
-      chartRef.current.applyOptions({ width: ref.current.clientWidth });
-    };
-    window.addEventListener("resize", onResize);
-
-    return () => {
-      window.removeEventListener("resize", onResize);
-      chart.remove();
-      chartRef.current = null;
-    };
-  }, [bars, data, onSelectEvent]);
+    if (!didInitialFitRef.current) {
+      chartRef.current.timeScale().fitContent();
+      didInitialFitRef.current = true;
+    } else if (visible) {
+      chartRef.current.timeScale().setVisibleLogicalRange(visible);
+    }
+  }, [bars, data, tf]);
 
   return (
     <section className="panel">
@@ -127,8 +163,7 @@ export function ChartPanel({ tf, data, onSelectEvent }: Props) {
         <h3>Chart {tf}</h3>
         <span className="muted">Bars: {data?.historyBarsExported ?? 0}</span>
       </div>
-      <div ref={ref} className="chart-root" />
+      <div ref={rootRef} className="chart-root" />
     </section>
   );
 }
-
