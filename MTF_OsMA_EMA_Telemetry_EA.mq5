@@ -201,7 +201,8 @@ input bool InpEnableSwingRules = true;
 input int InpOsmaSignal = 3;
 input int InpOsmaFast = 12;
 input int InpOsmaSlow = 59;
-input bool InpPrintEventArraysEveryTick = true;
+input bool InpPrintEventArraysEveryTick = false;
+input bool InpEnableChartEventsPanel = false;
 input bool InpLiveCrossDetection = true;
 input int InpStartupCrossLookbackBars = 1000;
 
@@ -2070,6 +2071,16 @@ string BuildStateJson()
    json += "}";
    json += "},";
 
+   double bid_now = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double ask_now = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   double spread_points = (ask_now - bid_now) / _Point;
+   json += "\"quote\":{";
+   json += "\"bid\":" + DoubleToString(bid_now, _Digits) + ",";
+   json += "\"ask\":" + DoubleToString(ask_now, _Digits) + ",";
+   json += "\"spreadPoints\":" + DoubleToString(spread_points, 1) + ",";
+   json += "\"updatedAt\":" + TimeToJson(TimeCurrent());
+   json += "},";
+
    json += "\"bar_monitor\":{";
    json += "\"previous_bar\":{";
    json += "\"color\":\"" + g_tfs[0].state.bars.prev_color + "\",";
@@ -2255,6 +2266,8 @@ bool UpdateTimeframe(int tf_idx)
 int OnInit()
   {
    g_trade.SetExpertMagicNumber(InpMagic);
+   if(!InpEnableChartEventsPanel)
+      Comment("");
    if(InpEnableHttpTelemetry)
       Print("HTTP telemetry enabled url=", InpTelemetryUrl);
 
@@ -2367,7 +2380,8 @@ void OnTick()
       SendJsonStateHttp(json);
      }
 
-   UpdateChartUnclosedEventsPanel();
+   if(InpEnableChartEventsPanel)
+      UpdateChartUnclosedEventsPanel();
 
    if(InpPrintEventArraysEveryTick)
       PrintAllEventArraysOnTick();

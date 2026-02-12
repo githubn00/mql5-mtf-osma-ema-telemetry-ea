@@ -122,6 +122,20 @@ body.dark-page {
   border-color: #0057b8;
 }
 
+.quote-chip {
+  border: 1px solid #c8d5e8;
+  border-radius: 20px;
+  padding: 4px 10px;
+  font-size: 12px;
+  color: #4b5f7a;
+}
+
+.layout-dark .quote-chip {
+  border-color: #475569;
+  color: #c7d7ef;
+  background: #111b31;
+}
+
 .panel-head {
   display: flex;
   justify-content: space-between;

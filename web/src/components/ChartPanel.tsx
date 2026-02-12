@@ -6,6 +6,12 @@ interface Props {
   tf: TfName;
   data?: ChartTfData;
   onSelectEvent: (ev: ChartEvent | null) => void;
+  darkMode: boolean;
+  onToggleDarkMode: () => void;
+  bid?: number;
+  ask?: number;
+  spreadPoints?: number;
+  countdown: string;
 }
 
 type IndicatorKey = "ema13" | "ema34" | "ema150" | "ema200" | "sma2" | "sma5" | "osma";
@@ -37,17 +43,18 @@ function nearestEvent(events: ChartEvent[], time: number, price?: number) {
   return best;
 }
 
-export function ChartPanel({ tf, data, onSelectEvent }: Props) {
+export function ChartPanel({ tf, data, onSelectEvent, darkMode, onToggleDarkMode, bid, ask, spreadPoints, countdown }: Props) {
   const panelRef = useRef<HTMLDivElement | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<any>(null);
   const candleRef = useRef<any>(null);
+  const bidLineRef = useRef<any>(null);
+  const askLineRef = useRef<any>(null);
   const linesRef = useRef<Record<IndicatorKey, any>>({} as Record<IndicatorKey, any>);
   const eventsRef = useRef<ChartEvent[]>([]);
   const didInitialFitRef = useRef(false);
   const prevTfRef = useRef<TfName>(tf);
 
-  const [darkMode, setDarkMode] = useState(false);
   const [crosshair, setCrosshair] = useState<CrosshairValues | null>(null);
   const [indicatorVisible, setIndicatorVisible] = useState<Record<IndicatorKey, boolean>>({
     ema13: true,
@@ -101,12 +108,30 @@ export function ChartPanel({ tf, data, onSelectEvent }: Props) {
       borderVisible: false,
     });
 
+    bidLineRef.current = candle.createPriceLine({
+      price: 0,
+      color: "#22c55e",
+      lineWidth: 1,
+      lineStyle: LineStyle.Dotted,
+      axisLabelVisible: true,
+      title: "Bid",
+    });
+    askLineRef.current = candle.createPriceLine({
+      price: 0,
+      color: "#ef4444",
+      lineWidth: 1,
+      lineStyle: LineStyle.Dotted,
+      axisLabelVisible: true,
+      title: "Ask",
+    });
+
     const makeLine = (key: IndicatorKey, color: string, width = 2, style = LineStyle.Solid) => {
       linesRef.current[key] = chart.addLineSeries({
         color,
         lineWidth: width as any,
         lineStyle: style,
         priceLineVisible: false,
+        lastValueVisible: false,
         visible: true,
       });
     };
@@ -172,6 +197,8 @@ export function ChartPanel({ tf, data, onSelectEvent }: Props) {
       chartRef.current = null;
       candleRef.current = null;
       linesRef.current = {} as Record<IndicatorKey, any>;
+      bidLineRef.current = null;
+      askLineRef.current = null;
     };
   }, [onSelectEvent]);
 
@@ -206,7 +233,7 @@ export function ChartPanel({ tf, data, onSelectEvent }: Props) {
         position: ev.direction > 0 ? "belowBar" : "aboveBar",
         color: ev.direction > 0 ? "#16a34a" : "#dc2626",
         shape: ev.type === "extremum" ? "circle" : ev.direction > 0 ? "arrowUp" : "arrowDown",
-        text: ev.type,
+        text: "",
       }));
 
     candleRef.current.setMarkers(markers as any);
@@ -220,6 +247,15 @@ export function ChartPanel({ tf, data, onSelectEvent }: Props) {
       chartRef.current.timeScale().setVisibleLogicalRange(visible);
     }
   }, [bars, data, tf, markerVisible]);
+
+  useEffect(() => {
+    if (bidLineRef.current && typeof bid === "number" && bid > 0) {
+      bidLineRef.current.applyOptions({ price: bid });
+    }
+    if (askLineRef.current && typeof ask === "number" && ask > 0) {
+      askLineRef.current.applyOptions({ price: ask });
+    }
+  }, [bid, ask]);
 
   useEffect(() => {
     if (!chartRef.current) return;
@@ -271,8 +307,12 @@ export function ChartPanel({ tf, data, onSelectEvent }: Props) {
 
       <div className="controls-row">
         <button onClick={() => chartRef.current?.timeScale().fitContent()}>Reset Zoom</button>
-        <button onClick={() => setDarkMode((v) => !v)}>{darkMode ? "Light" : "Dark"}</button>
+        <button onClick={onToggleDarkMode}>{darkMode ? "Light" : "Dark"}</button>
         <button onClick={() => void toggleFullscreen()}>Fullscreen</button>
+        <span className="quote-chip">Bid: {typeof bid === "number" ? bid.toFixed(2) : "-"}</span>
+        <span className="quote-chip">Ask: {typeof ask === "number" ? ask.toFixed(2) : "-"}</span>
+        <span className="quote-chip">Spread: {typeof spreadPoints === "number" ? spreadPoints.toFixed(1) : "-"} pt</span>
+        <span className="quote-chip">{tf} close in: {countdown}</span>
       </div>
 
       <div className="controls-row">

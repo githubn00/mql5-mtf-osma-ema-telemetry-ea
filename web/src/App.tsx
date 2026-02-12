@@ -18,6 +18,7 @@ function App() {
   const [selectedEvent, setSelectedEvent] = useState<ChartEvent | null>(null);
   const [toast, setToast] = useState("");
   const [darkMode, setDarkMode] = useState(false);
+  const [nowSec, setNowSec] = useState(Math.floor(Date.now() / 1000));
 
   const chartData = (state.live?.chart?.[tf] as any) ?? undefined;
   const symbol = state.meta?.symbol || "UNKNOWN";
@@ -27,6 +28,31 @@ function App() {
     const s = Math.max(0, Math.floor(Date.now() / 1000 - state._stateUpdatedAt));
     return `${s}s`;
   }, [state._stateUpdatedAt]);
+
+  useEffect(() => {
+    const id = window.setInterval(() => setNowSec(Math.floor(Date.now() / 1000)), 1000);
+    return () => window.clearInterval(id);
+  }, []);
+
+  const tfSecMap: Record<TfName, number> = {
+    M1: 60,
+    M5: 300,
+    M15: 900,
+    H1: 3600,
+    H4: 14400,
+    D1: 86400,
+  };
+
+  const countdown = useMemo(() => {
+    const bars = chartData?.bars ?? [];
+    if (!bars.length) return "-";
+    const lastBar = bars[bars.length - 1];
+    if (!lastBar?.time) return "-";
+    const remain = Math.max(0, lastBar.time + tfSecMap[tf] - nowSec);
+    const mm = Math.floor(remain / 60);
+    const ss = remain % 60;
+    return `${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}`;
+  }, [chartData, nowSec, tf]);
 
   useEffect(() => {
     document.body.classList.toggle("dark-page", darkMode);
@@ -51,6 +77,10 @@ function App() {
           <span className="chip">Source: {state._source || "-"}</span>
           <span className="chip">Freshness: {freshness}</span>
           <span className="chip">File: {state._selectedFile || "-"}</span>
+          <span className="chip">Bid: {state.live?.quote?.bid?.toFixed?.(2) ?? "-"}</span>
+          <span className="chip">Ask: {state.live?.quote?.ask?.toFixed?.(2) ?? "-"}</span>
+          <span className="chip">Spread: {state.live?.quote?.spreadPoints?.toFixed?.(1) ?? "-"} pt</span>
+          <span className="chip">{tf} close in: {countdown}</span>
         </div>
         {error && <div className="error">State error: {error}</div>}
         {actionError && <div className="error">Action error: {actionError}</div>}
@@ -69,6 +99,10 @@ function App() {
         onSelectEvent={setSelectedEvent}
         darkMode={darkMode}
         onToggleDarkMode={() => setDarkMode((v) => !v)}
+        bid={state.live?.quote?.bid}
+        ask={state.live?.quote?.ask}
+        spreadPoints={state.live?.quote?.spreadPoints}
+        countdown={countdown}
       />
       <SignalPanel state={state} />
       <TelemetryTable state={state} />

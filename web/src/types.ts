@@ -69,6 +69,12 @@ export interface TelemetryState {
   live?: {
     per_tf_state?: Record<string, TfLiveState>;
     chart?: Record<string, ChartTfData>;
+    quote?: {
+      bid?: number;
+      ask?: number;
+      spreadPoints?: number;
+      updatedAt?: number;
+    };
     signals?: {
       aligned?: { osmaBuy?: number; osmaSell?: number; emaBuy?: number; emaSell?: number };
       strong?: { osmaBuy?: boolean; osmaSell?: boolean; emaBuy?: boolean; emaSell?: boolean };
