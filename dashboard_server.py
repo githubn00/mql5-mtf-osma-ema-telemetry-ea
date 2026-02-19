@@ -20,6 +20,13 @@ PREFER_FILE = False
 WEB_DIST_DIR = None
 ACTION_LOG_PATH = None
 ACTIONS = deque(maxlen=500)
+COMMAND_FILE_PATH = None
+CHART_REQUEST_PATH = None
+CHART_REQUEST_STATE = {"updatedAt": 0, "globalBars": 500, "perTfBars": {}}
+CHART_REQUEST_LOCK = threading.Lock()
+VALID_TFS = ("M1", "M5", "M15", "H1", "H4", "D1")
+MIN_CHART_BARS = 50
+MAX_CHART_BARS = 10000
 
 
 HTML_PAGE = """<!doctype html>
@@ -50,6 +57,162 @@ HTML_PAGE = """<!doctype html>
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def default_command_file_path() -> str:
+    appdata = os.environ.get("APPDATA", "")
+    if appdata:
+        return os.path.join(
+            appdata,
+            "MetaQuotes",
+            "Terminal",
+            "Common",
+            "Files",
+            "ea_multitf_commands.jsonl",
+        )
+    return os.path.abspath("ea_multitf_commands.jsonl")
+
+
+def default_chart_request_file_path() -> str:
+    appdata = os.environ.get("APPDATA", "")
+    if appdata:
+        return os.path.join(
+            appdata,
+            "MetaQuotes",
+            "Terminal",
+            "Common",
+            "Files",
+            "ea_multitf_chart_request.json",
+        )
+    return os.path.abspath("ea_multitf_chart_request.json")
+
+
+def clamp_chart_bars(value):
+    try:
+        n = int(value)
+    except Exception:
+        return None
+    if n < MIN_CHART_BARS:
+        n = MIN_CHART_BARS
+    if n > MAX_CHART_BARS:
+        n = MAX_CHART_BARS
+    return n
+
+
+def sanitize_chart_request(raw):
+    state = {"updatedAt": int(datetime.now(timezone.utc).timestamp()), "globalBars": 500, "perTfBars": {}}
+    if not isinstance(raw, dict):
+        return state
+
+    gb = clamp_chart_bars(raw.get("globalBars", state["globalBars"]))
+    if gb is not None:
+        state["globalBars"] = gb
+
+    per = raw.get("perTfBars", {})
+    clean = {}
+    if isinstance(per, dict):
+        for k, v in per.items():
+            tf = str(k).strip().upper()
+            if tf not in VALID_TFS:
+                continue
+            bars = clamp_chart_bars(v)
+            if bars is not None:
+                clean[tf] = bars
+    state["perTfBars"] = clean
+
+    try:
+        ua = int(raw.get("updatedAt", state["updatedAt"]))
+    except Exception:
+        ua = state["updatedAt"]
+    state["updatedAt"] = ua
+    return state
+
+
+def load_chart_request(path: str):
+    if not path or not os.path.isfile(path):
+        return sanitize_chart_request({})
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return sanitize_chart_request(json.load(f))
+    except Exception:
+        return sanitize_chart_request({})
+
+
+def save_chart_request(path: str, state):
+    if not path:
+        return
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+    except Exception:
+        pass
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(sanitize_chart_request(state), f, ensure_ascii=True, separators=(",", ":"))
+    except Exception:
+        pass
+
+
+def snapshot_chart_request():
+    with CHART_REQUEST_LOCK:
+        return {
+            "updatedAt": int(CHART_REQUEST_STATE.get("updatedAt", 0)),
+            "globalBars": int(CHART_REQUEST_STATE.get("globalBars", 500)),
+            "perTfBars": dict(CHART_REQUEST_STATE.get("perTfBars", {})),
+        }
+
+
+def merge_chart_request(payload):
+    global CHART_REQUEST_STATE
+    if not isinstance(payload, dict):
+        return None, "payload must be object"
+
+    with CHART_REQUEST_LOCK:
+        next_state = {
+            "updatedAt": int(CHART_REQUEST_STATE.get("updatedAt", 0)),
+            "globalBars": int(CHART_REQUEST_STATE.get("globalBars", 500)),
+            "perTfBars": dict(CHART_REQUEST_STATE.get("perTfBars", {})),
+        }
+
+        if payload.get("reset", False):
+            next_state["perTfBars"] = {}
+
+        if "globalBars" in payload:
+            gb = clamp_chart_bars(payload.get("globalBars"))
+            if gb is None:
+                return None, "globalBars must be an integer"
+            next_state["globalBars"] = gb
+
+        tf = str(payload.get("tf", "")).strip().upper()
+        if tf:
+            if tf not in VALID_TFS:
+                return None, f"tf must be one of {','.join(VALID_TFS)}"
+            bars = clamp_chart_bars(payload.get("bars"))
+            if bars is None:
+                return None, "bars must be an integer"
+            per = dict(next_state.get("perTfBars", {}))
+            per[tf] = bars
+            next_state["perTfBars"] = per
+
+        per_tf = payload.get("perTfBars")
+        if isinstance(per_tf, dict):
+            per = dict(next_state.get("perTfBars", {}))
+            for k, v in per_tf.items():
+                tf_name = str(k).strip().upper()
+                if tf_name not in VALID_TFS:
+                    continue
+                bars = clamp_chart_bars(v)
+                if bars is not None:
+                    per[tf_name] = bars
+            next_state["perTfBars"] = per
+
+        next_state["updatedAt"] = int(datetime.now(timezone.utc).timestamp())
+        CHART_REQUEST_STATE = sanitize_chart_request(next_state)
+        save_chart_request(CHART_REQUEST_PATH, CHART_REQUEST_STATE)
+        return {
+            "updatedAt": int(CHART_REQUEST_STATE.get("updatedAt", 0)),
+            "globalBars": int(CHART_REQUEST_STATE.get("globalBars", 500)),
+            "perTfBars": dict(CHART_REQUEST_STATE.get("perTfBars", {})),
+        }, ""
 
 
 def read_state_from_file(path: str):
@@ -135,8 +298,8 @@ def freshest_file_state(configured_path: str):
 
         if (
             best_state is None
-            or updated_at > best_updated_at
-            or (updated_at == best_updated_at and mtime > best_mtime)
+            or mtime > best_mtime
+            or (mtime == best_mtime and updated_at > best_updated_at)
         ):
             best_state = state
             best_path = p
@@ -154,11 +317,13 @@ def parse_action_payload(data):
     symbol = str(data.get("symbol", "")).strip()
     source = str(data.get("source", "web_ui")).strip() or "web_ui"
     ts = data.get("ts", 0)
+    lot = data.get("lot", None)
+    ticket = data.get("ticket", None)
     meta = data.get("meta", {})
 
-    allowed = {"buy", "sell", "close_all"}
+    allowed = {"buy", "sell", "close_all", "close_ticket"}
     if action not in allowed:
-        return None, "action must be buy/sell/close_all"
+        return None, "action must be buy/sell/close_all/close_ticket"
     if not symbol:
         return None, "symbol is required"
     if not isinstance(meta, dict):
@@ -169,12 +334,34 @@ def parse_action_payload(data):
     except Exception:
         ts = 0
 
+    if action in {"buy", "sell"}:
+        try:
+            lot = float(lot)
+        except Exception:
+            return None, "lot is required for buy/sell"
+        if lot <= 0:
+            return None, "lot must be > 0"
+    else:
+        lot = None
+
+    if action == "close_ticket":
+        try:
+            ticket = int(ticket)
+        except Exception:
+            return None, "ticket is required for close_ticket"
+        if ticket <= 0:
+            return None, "ticket must be > 0"
+    else:
+        ticket = None
+
     rec = {
         "id": str(uuid.uuid4()),
         "action": action,
         "symbol": symbol,
         "source": source,
         "ts": ts,
+        "lot": lot,
+        "ticket": ticket,
         "meta": meta,
         "acceptedAt": now_iso(),
     }
@@ -188,6 +375,30 @@ def append_action_log(rec):
     try:
         with open(ACTION_LOG_PATH, "a", encoding="utf-8") as f:
             f.write(json.dumps(rec, ensure_ascii=True) + "\n")
+    except Exception:
+        pass
+
+
+def append_command_queue(rec):
+    if not COMMAND_FILE_PATH:
+        return
+    try:
+        os.makedirs(os.path.dirname(COMMAND_FILE_PATH), exist_ok=True)
+    except Exception:
+        pass
+    cmd = {
+        "id": rec.get("id"),
+        "action": rec.get("action"),
+        "symbol": rec.get("symbol"),
+        "lot": rec.get("lot"),
+        "ticket": rec.get("ticket"),
+        "source": rec.get("source"),
+        "ts": rec.get("ts"),
+        "meta": rec.get("meta", {}),
+    }
+    try:
+        with open(COMMAND_FILE_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps(cmd, ensure_ascii=True) + "\n")
     except Exception:
         pass
 
@@ -251,7 +462,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, f"{ctype}; charset=utf-8" if ctype.startswith("text/") else ctype, target.read_bytes())
             return True
 
-        if (dist / "index.html").is_file() and path not in {"/api/state", "/api/telemetry", "/api/actions"}:
+        if (dist / "index.html").is_file() and path not in {"/api/state", "/api/telemetry", "/api/actions", "/api/chart-request"}:
             self._send(200, "text/html; charset=utf-8", (dist / "index.html").read_bytes())
             return True
 
@@ -287,6 +498,7 @@ class Handler(BaseHTTPRequestHandler):
             out["_httpUpdatedAt"] = mem_u
             out["_fileMtime"] = file_mtime
             out["_selectedFile"] = file_path
+            out["_chartRequest"] = snapshot_chart_request()
             self._send_json(200, out)
             return
 
@@ -302,6 +514,10 @@ class Handler(BaseHTTPRequestHandler):
                 limit = 500
             items = list(ACTIONS)[-limit:]
             self._send_json(200, {"items": items, "count": len(items)})
+            return
+
+        if path == "/api/chart-request":
+            self._send_json(200, {"ok": True, "request": snapshot_chart_request()})
             return
 
         if path == "/":
@@ -344,7 +560,22 @@ class Handler(BaseHTTPRequestHandler):
                 return
 
             append_action_log(rec)
+            append_command_queue(rec)
             self._send_json(200, {"ok": True, "id": rec["id"], "acceptedAt": rec["acceptedAt"]})
+            return
+
+        if path == "/api/chart-request":
+            try:
+                data = self._read_json_body()
+            except Exception as exc:
+                self._send_json(400, {"ok": False, "error": str(exc)})
+                return
+
+            req, err = merge_chart_request(data)
+            if err:
+                self._send_json(400, {"ok": False, "error": err})
+                return
+            self._send_json(200, {"ok": True, "request": req})
             return
 
         self._send_json(404, {"error": "not found"})
@@ -377,25 +608,44 @@ def main():
         default="action_log.jsonl",
         help="Path to action log JSONL file",
     )
+    parser.add_argument(
+        "--command-file",
+        default="",
+        help="Path to EA command queue JSONL file (defaults to MT5 Common/Files)",
+    )
+    parser.add_argument(
+        "--chart-request-file",
+        default="",
+        help="Path to EA chart-request JSON file (defaults to MT5 Common/Files)",
+    )
     args = parser.parse_args()
 
     global JSON_FILE_PATH
     global PREFER_FILE
     global WEB_DIST_DIR
     global ACTION_LOG_PATH
+    global COMMAND_FILE_PATH
+    global CHART_REQUEST_PATH
+    global CHART_REQUEST_STATE
 
     JSON_FILE_PATH = args.json_file
     PREFER_FILE = args.prefer_file
     WEB_DIST_DIR = os.path.abspath(args.web_dist)
     ACTION_LOG_PATH = os.path.abspath(args.action_log)
+    COMMAND_FILE_PATH = os.path.abspath(args.command_file) if args.command_file else default_command_file_path()
+    CHART_REQUEST_PATH = os.path.abspath(args.chart_request_file) if args.chart_request_file else default_chart_request_file_path()
 
     load_action_log(ACTION_LOG_PATH)
+    CHART_REQUEST_STATE = load_chart_request(CHART_REQUEST_PATH)
+    save_chart_request(CHART_REQUEST_PATH, CHART_REQUEST_STATE)
 
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     print(f"listening on http://{args.host}:{args.port}")
     print(f"json_file={os.path.abspath(JSON_FILE_PATH) if JSON_FILE_PATH else '<auto>'} prefer_file={PREFER_FILE}")
     print(f"web_dist={WEB_DIST_DIR} ({'found' if os.path.isdir(WEB_DIST_DIR) else 'missing'})")
     print(f"action_log={ACTION_LOG_PATH} loaded_actions={len(ACTIONS)}")
+    print(f"command_file={COMMAND_FILE_PATH}")
+    print(f"chart_request_file={CHART_REQUEST_PATH} request={CHART_REQUEST_STATE}")
     server.serve_forever()
 
 

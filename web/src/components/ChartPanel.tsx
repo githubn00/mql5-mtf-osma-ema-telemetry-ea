@@ -1,5 +1,6 @@
 ﻿import { useEffect, useMemo, useRef, useState } from "react";
 import { ColorType, CrosshairMode, LineStyle, createChart } from "lightweight-charts";
+import { postChartRequest } from "../api/client";
 import type { ChartEvent, ChartTfData, TfName } from "../types";
 
 interface Props {
@@ -25,6 +26,8 @@ interface CrosshairValues {
   close?: number;
   values: Partial<Record<IndicatorKey, number>>;
 }
+
+const SCROLL_GROW_STEP = 250;
 
 function nearestEvent(events: ChartEvent[], time: number, price?: number) {
   if (!events.length) return null;
@@ -63,6 +66,13 @@ export function ChartPanel({ tf, data, onSelectEvent, darkMode, onToggleDarkMode
   const prevTfRef = useRef<TfName>(tf);
   const syncingRangeRef = useRef(false);
 
+  const tfRef = useRef<TfName>(tf);
+  const requestInFlightRef = useRef(false);
+  const nextRequestAllowedAtRef = useRef(0);
+  const barsRequestedRef = useRef<Record<TfName, number>>({ M1: 0, M5: 0, M15: 0, H1: 0, H4: 0, D1: 0 });
+  const barsExportedRef = useRef<Record<TfName, number>>({ M1: 0, M5: 0, M15: 0, H1: 0, H4: 0, D1: 0 });
+  const barsMaxRef = useRef<Record<TfName, number>>({ M1: 0, M5: 0, M15: 0, H1: 0, H4: 0, D1: 0 });
+
   const [crosshair, setCrosshair] = useState<CrosshairValues | null>(null);
   const [indicatorVisible, setIndicatorVisible] = useState<Record<IndicatorKey, boolean>>({
     ema13: true,
@@ -93,13 +103,34 @@ export function ChartPanel({ tf, data, onSelectEvent, darkMode, onToggleDarkMode
   );
 
   useEffect(() => {
+    tfRef.current = tf;
+  }, [tf]);
+
+  useEffect(() => {
+    const exported = data?.historyBarsExported ?? 0;
+    const requested = data?.historyBarsRequested ?? exported;
+    const maxBars = data?.historyBarsMax ?? Math.max(exported, requested);
+    barsExportedRef.current[tf] = exported;
+    barsRequestedRef.current[tf] = requested;
+    barsMaxRef.current[tf] = Math.max(maxBars, requested);
+  }, [data, tf]);
+
+  useEffect(() => {
     if (!priceRootRef.current || !osmaRootRef.current || priceChartRef.current || osmaChartRef.current) return;
 
     const baseOptions = {
       crosshair: { mode: CrosshairMode.Normal },
       rightPriceScale: { borderColor: "#d6dce5" },
-      timeScale: { borderColor: "#d6dce5", timeVisible: true, secondsVisible: false },
+      timeScale: {
+        borderColor: "#d6dce5",
+        timeVisible: true,
+        secondsVisible: false,
+        rightBarStaysOnScroll: true,
+        shiftVisibleRangeOnNewBar: false,
+      },
       grid: { vertLines: { color: "#eef2f7" }, horzLines: { color: "#eef2f7" } },
+      handleScroll: { mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: false },
+      handleScale: { mouseWheel: true, pinch: true, axisPressedMouseMove: true, axisDoubleClickReset: true },
     };
 
     const priceChart = createChart(priceRootRef.current, {
@@ -159,6 +190,33 @@ export function ChartPanel({ tf, data, onSelectEvent, darkMode, onToggleDarkMode
       syncingRangeRef.current = true;
       osmaChartRef.current.timeScale().setVisibleLogicalRange(range);
       syncingRangeRef.current = false;
+
+      if (typeof range.from !== "number") return;
+      if (requestInFlightRef.current) return;
+      const now = Date.now();
+      if (now < nextRequestAllowedAtRef.current) return;
+
+      const tfNow = tfRef.current;
+      const exported = barsExportedRef.current[tfNow] ?? 0;
+      const requested = barsRequestedRef.current[tfNow] ?? exported;
+      const maxBars = barsMaxRef.current[tfNow] ?? requested;
+      if (exported <= 0 || requested <= 0 || maxBars <= requested) return;
+
+      const leftThreshold = Math.max(3, Math.floor(exported * 0.02));
+      if (range.from > leftThreshold) return;
+
+      const nextBars = Math.min(maxBars, requested + Math.max(SCROLL_GROW_STEP, Math.floor(requested * 0.5)));
+      if (nextBars <= requested) return;
+
+      requestInFlightRef.current = true;
+      nextRequestAllowedAtRef.current = now + 1200;
+      void postChartRequest(tfNow, nextBars)
+        .then(() => {
+          barsRequestedRef.current[tfNow] = nextBars;
+        })
+        .finally(() => {
+          requestInFlightRef.current = false;
+        });
     };
 
     const syncFromOsma = (range: any) => {
@@ -196,14 +254,7 @@ export function ChartPanel({ tf, data, onSelectEvent, darkMode, onToggleDarkMode
       const op = param.seriesData?.get(osmaSeriesRef.current);
       if (op && typeof op.value === "number") values.osma = op.value;
 
-      setCrosshair({
-        time: Number(param.time),
-        open: c.open,
-        high: c.high,
-        low: c.low,
-        close: c.close,
-        values,
-      });
+      setCrosshair({ time: Number(param.time), open: c.open, high: c.high, low: c.low, close: c.close, values });
     };
 
     priceChart.subscribeClick(handleClick);
@@ -294,6 +345,7 @@ export function ChartPanel({ tf, data, onSelectEvent, darkMode, onToggleDarkMode
     prevTfRef.current = tf;
     if (!didInitialFitRef.current || tfChanged) {
       priceChartRef.current.timeScale().fitContent();
+      osmaChartRef.current.timeScale().fitContent();
       didInitialFitRef.current = true;
     } else if (visible) {
       priceChartRef.current.timeScale().setVisibleLogicalRange(visible);
@@ -313,12 +365,7 @@ export function ChartPanel({ tf, data, onSelectEvent, darkMode, onToggleDarkMode
           title: "Bid",
         });
       } else if (bidLineRef.current) {
-        bidLineRef.current.applyOptions({
-          price: bid,
-          lineVisible: true,
-          axisLabelVisible: true,
-          title: "Bid",
-        });
+        bidLineRef.current.applyOptions({ price: bid, lineVisible: true, axisLabelVisible: true, title: "Bid" });
       }
     } else if (bidLineRef.current) {
       bidLineRef.current.applyOptions({ lineVisible: false, axisLabelVisible: false });
@@ -335,12 +382,7 @@ export function ChartPanel({ tf, data, onSelectEvent, darkMode, onToggleDarkMode
           title: "Ask",
         });
       } else if (askLineRef.current) {
-        askLineRef.current.applyOptions({
-          price: ask,
-          lineVisible: true,
-          axisLabelVisible: true,
-          title: "Ask",
-        });
+        askLineRef.current.applyOptions({ price: ask, lineVisible: true, axisLabelVisible: true, title: "Ask" });
       }
     } else if (askLineRef.current) {
       askLineRef.current.applyOptions({ lineVisible: false, axisLabelVisible: false });
@@ -379,13 +421,8 @@ export function ChartPanel({ tf, data, onSelectEvent, darkMode, onToggleDarkMode
     }
   }, [darkMode, indicatorVisible]);
 
-  const toggleIndicator = (k: IndicatorKey) => {
-    setIndicatorVisible((p) => ({ ...p, [k]: !p[k] }));
-  };
-
-  const toggleMarker = (k: MarkerKey) => {
-    setMarkerVisible((p) => ({ ...p, [k]: !p[k] }));
-  };
+  const toggleIndicator = (k: IndicatorKey) => setIndicatorVisible((p) => ({ ...p, [k]: !p[k] }));
+  const toggleMarker = (k: MarkerKey) => setMarkerVisible((p) => ({ ...p, [k]: !p[k] }));
 
   const toggleFullscreen = async () => {
     if (!panelRef.current) return;

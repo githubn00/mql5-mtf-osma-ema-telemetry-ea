@@ -203,6 +203,27 @@ td {
   gap: 8px;
 }
 
+.lot-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.lot-row input {
+  width: 100px;
+  border: 1px solid #c8d5e8;
+  border-radius: 8px;
+  padding: 5px 8px;
+  background: #f8fbff;
+}
+
+.layout-dark .lot-row input {
+  border-color: #475569;
+  background: #16223c;
+  color: #dbe7ff;
+}
+
 button.buy {
   background: #dff5e8;
 }
@@ -213,6 +234,26 @@ button.sell {
 
 button.close {
   background: #fff2dd;
+}
+
+.buy-text {
+  color: #0c7a43;
+  font-weight: 600;
+}
+
+.sell-text {
+  color: #b91c1c;
+  font-weight: 600;
+}
+
+.profit-up {
+  color: #0c7a43;
+  font-weight: 600;
+}
+
+.profit-down {
+  color: #b91c1c;
+  font-weight: 600;
 }
 
 .muted {

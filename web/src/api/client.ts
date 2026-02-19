@@ -1,4 +1,4 @@
-﻿import type { ActionRecord, TelemetryState } from "../types";
+﻿import type { ActionRecord, TelemetryState, TfName } from "../types";
 
 const API_BASE = "";
 
@@ -15,12 +15,18 @@ export async function fetchState(): Promise<TelemetryState> {
   return parseJson<TelemetryState>(res);
 }
 
-export async function postAction(action: "buy" | "sell" | "close_all", symbol: string) {
+export async function postAction(
+  action: "buy" | "sell" | "close_all" | "close_ticket",
+  symbol: string,
+  options?: { lot?: number; ticket?: number }
+) {
   const payload = {
     action,
     symbol,
     source: "web_ui",
     ts: Date.now(),
+    lot: options?.lot,
+    ticket: options?.ticket,
     meta: {},
   };
   const res = await fetch(`${API_BASE}/api/actions`, {
@@ -37,3 +43,12 @@ export async function fetchActions(limit = 50): Promise<ActionRecord[]> {
   return payload.items ?? [];
 }
 
+export async function postChartRequest(tf: TfName, bars: number) {
+  const payload = { tf, bars, ts: Date.now(), source: "web_chart_scroll" };
+  const res = await fetch(`${API_BASE}/api/chart-request`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return parseJson<{ ok: boolean; request: { updatedAt: number; globalBars: number; perTfBars: Record<string, number> } }>(res);
+}

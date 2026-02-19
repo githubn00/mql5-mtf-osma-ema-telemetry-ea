@@ -9,6 +9,8 @@
 #define MAX_CROSS_EVENTS 80
 #define MAX_OSMA_EVENTS 80
 #define MAX_REASSESS_EVENTS 120
+#define MAX_UI_ACTION_LOG 40
+#define MAX_UI_PROCESSED_IDS 200
 
 enum TrendDirection
   {
@@ -177,6 +179,18 @@ struct EventTableRow
    string phase;
   };
 
+struct UiActionExec
+  {
+   string id;
+   string action;
+   string symbol;
+   double lot;
+   long ticket;
+   bool success;
+   string message;
+   datetime t;
+  };
+
 input bool InpDryRun = true;
 input StrategyMode InpStrategyMode = STRAT_BASE;
 input double InpFixedLot = 0.01;
@@ -189,6 +203,10 @@ input int InpConvergenceBars = 3;
 input int InpProjectionHorizonBars = 1;
 input string InpJsonFile = "ea_multitf_state.json";
 input int InpChartHistoryBars = 500;
+input int InpChartHistoryBarsMax = 10000;
+input string InpChartRequestFile = "ea_multitf_chart_request.json";
+input bool InpChartRequestUseCommonFolder = true;
+input int InpChartRequestPollMs = 750;
 input bool InpJsonUseCommonFolder = true;
 input bool InpEnableHttpTelemetry = false;
 input string InpTelemetryUrl = "http://127.0.0.1:8765/api/telemetry";
@@ -205,6 +223,11 @@ input bool InpPrintEventArraysEveryTick = false;
 input bool InpEnableChartEventsPanel = false;
 input bool InpLiveCrossDetection = true;
 input int InpStartupCrossLookbackBars = 1000;
+input bool InpEnableUiCommands = true;
+input string InpCommandFile = "ea_multitf_commands.jsonl";
+input bool InpCommandUseCommonFolder = true;
+input int InpCommandPollMs = 500;
+input int InpUiCommandMaxPerTick = 5;
 
 CTrade g_trade;
 TfRuntime g_tfs[TF_COUNT];
@@ -217,6 +240,15 @@ string g_last_recommendation = "NONE";
 int g_sid_counter = 0;
 double g_last_scalp_win = 0.0;
 uint g_last_http_send_ms = 0;
+uint g_last_chart_request_poll_ms = 0;
+uint g_last_command_poll_ms = 0;
+long g_command_file_offset = 0;
+int g_chart_history_target[TF_COUNT];
+int g_chart_history_last_request_updated_at = 0;
+string g_processed_cmd_ids[MAX_UI_PROCESSED_IDS];
+int g_processed_cmd_count = 0;
+UiActionExec g_ui_actions[MAX_UI_ACTION_LOG];
+int g_ui_action_count = 0;
 
 const ENUM_TIMEFRAMES TF_VALUES[TF_COUNT] = {PERIOD_M1, PERIOD_M5, PERIOD_M15, PERIOD_H1, PERIOD_H4, PERIOD_D1};
 const string TF_NAMES[TF_COUNT] = {"M1", "M5", "M15", "H1", "H4", "D1"};
@@ -270,6 +302,232 @@ int SignOf(double v)
    if(v > 0.0) return 1;
    if(v < 0.0) return -1;
    return 0;
+  }
+
+bool TryReadTextFile(const string &file_name, bool use_common, string &out)
+  {
+   out = "";
+   int flags = FILE_READ | FILE_TXT | FILE_ANSI;
+   if(use_common)
+      flags |= FILE_COMMON;
+
+   int h = FileOpen(file_name, flags);
+   if(h == INVALID_HANDLE)
+      return false;
+
+   while(!FileIsEnding(h))
+      out += FileReadString(h);
+
+   FileClose(h);
+   return StringLen(out) > 0;
+  }
+
+bool IsJsonWhitespace(int ch)
+  {
+   return (ch == 32 || ch == 9 || ch == 10 || ch == 13);
+  }
+
+int JsonFindKeyColon(const string &json, const string &key)
+  {
+   string probe = "\"" + key + "\"";
+   int kp = StringFind(json, probe, 0);
+   if(kp < 0)
+      return -1;
+   return StringFind(json, ":", kp + StringLen(probe));
+  }
+
+bool JsonExtractString(const string &json, const string &key, string &out)
+  {
+   out = "";
+   int cp = JsonFindKeyColon(json, key);
+   if(cp < 0)
+      return false;
+
+   int n = StringLen(json);
+   int i = cp + 1;
+   while(i < n && IsJsonWhitespace(StringGetCharacter(json, i)))
+      i++;
+   if(i >= n || StringGetCharacter(json, i) != 34)
+      return false;
+   i++;
+
+   bool escape = false;
+   for(; i < n; i++)
+     {
+      int ch = StringGetCharacter(json, i);
+      if(escape)
+        {
+         out += StringSubstr(json, i, 1);
+         escape = false;
+         continue;
+        }
+      if(ch == 92)
+        {
+         escape = true;
+         continue;
+        }
+      if(ch == 34)
+         return true;
+      out += StringSubstr(json, i, 1);
+     }
+   return false;
+  }
+
+bool JsonExtractDouble(const string &json, const string &key, double &out)
+  {
+   out = 0.0;
+   int cp = JsonFindKeyColon(json, key);
+   if(cp < 0)
+      return false;
+
+   int n = StringLen(json);
+   int i = cp + 1;
+   while(i < n && IsJsonWhitespace(StringGetCharacter(json, i)))
+      i++;
+   if(i >= n)
+      return false;
+
+   int start = i;
+   while(i < n)
+     {
+      int ch = StringGetCharacter(json, i);
+      if((ch >= 48 && ch <= 57) || ch == 45 || ch == 43 || ch == 46 || ch == 101 || ch == 69)
+        {
+         i++;
+         continue;
+        }
+      break;
+     }
+   if(i <= start)
+      return false;
+
+   out = StringToDouble(StringSubstr(json, start, i - start));
+   return true;
+  }
+
+bool JsonExtractLong(const string &json, const string &key, long &out)
+  {
+   double d = 0.0;
+   if(!JsonExtractDouble(json, key, d))
+      return false;
+   out = (long)d;
+   return true;
+  }
+
+int ClampChartHistoryBars(int bars)
+  {
+   int max_bars = InpChartHistoryBarsMax;
+   if(max_bars < 50)
+      max_bars = 50;
+   if(max_bars > 10000)
+      max_bars = 10000;
+   if(bars < 50)
+      return 50;
+   if(bars > max_bars)
+      return max_bars;
+   return bars;
+  }
+
+string JsonExtractObject(const string &json, const string &key)
+  {
+   int cp = JsonFindKeyColon(json, key);
+   if(cp < 0)
+      return "";
+
+   int n = StringLen(json);
+   int i = cp + 1;
+   while(i < n)
+     {
+      int ch = StringGetCharacter(json, i);
+      if(!IsJsonWhitespace(ch))
+         break;
+      i++;
+     }
+   if(i >= n || StringGetCharacter(json, i) != 123)
+      return "";
+
+   int start = i;
+   int depth = 0;
+   bool in_string = false;
+   bool escape = false;
+   for(; i < n; i++)
+     {
+      int ch = StringGetCharacter(json, i);
+      if(in_string)
+        {
+         if(escape)
+           {
+            escape = false;
+            continue;
+           }
+         if(ch == 92)
+           {
+            escape = true;
+            continue;
+           }
+         if(ch == 34)
+            in_string = false;
+         continue;
+        }
+      if(ch == 34)
+        {
+         in_string = true;
+         continue;
+        }
+      if(ch == 123) depth++;
+      else if(ch == 125)
+        {
+         depth--;
+         if(depth == 0)
+            return StringSubstr(json, start, i - start + 1);
+        }
+     }
+   return "";
+  }
+
+int JsonExtractInt(const string &json, const string &key, int fallback)
+  {
+   double out = 0.0;
+   if(!JsonExtractDouble(json, key, out))
+      return fallback;
+   return (int)out;
+  }
+
+bool TryReadChartRequestFile(string &out)
+  {
+   if(TryReadTextFile(InpChartRequestFile, InpChartRequestUseCommonFolder, out))
+      return true;
+   if(TryReadTextFile(InpChartRequestFile, !InpChartRequestUseCommonFolder, out))
+      return true;
+   return false;
+  }
+
+void RefreshChartHistoryRequest()
+  {
+   if(InpChartRequestPollMs > 0 && g_last_chart_request_poll_ms > 0)
+     {
+      uint elapsed = GetTickCount() - g_last_chart_request_poll_ms;
+      if(elapsed < (uint)InpChartRequestPollMs)
+         return;
+     }
+   g_last_chart_request_poll_ms = GetTickCount();
+
+   string raw = "";
+   if(!TryReadChartRequestFile(raw))
+      return;
+
+   int fallback = ClampChartHistoryBars(InpChartHistoryBars);
+   int global_req = ClampChartHistoryBars(JsonExtractInt(raw, "globalBars", fallback));
+   g_chart_history_last_request_updated_at = JsonExtractInt(raw, "updatedAt", g_chart_history_last_request_updated_at);
+   string per_tf = JsonExtractObject(raw, "perTfBars");
+
+   for(int i = 0; i < TF_COUNT; i++)
+     {
+      int tf_req = global_req;
+      if(StringLen(per_tf) > 0)
+         tf_req = ClampChartHistoryBars(JsonExtractInt(per_tf, g_tfs[i].tf_name, tf_req));
+      g_chart_history_target[i] = tf_req;
+     }
   }
 
 bool LoadBuffer(int handle, int count, double &dst[])
@@ -1561,6 +1819,251 @@ void ManagePositions(bool strong_buy, bool strong_sell)
      }
   }
 
+bool IsProcessedUiCommandId(const string &id)
+  {
+   if(StringLen(id) <= 0)
+      return true;
+   for(int i = 0; i < g_processed_cmd_count; i++)
+     {
+      if(g_processed_cmd_ids[i] == id)
+         return true;
+     }
+   return false;
+  }
+
+void MarkProcessedUiCommandId(const string &id)
+  {
+   if(StringLen(id) <= 0)
+      return;
+   if(IsProcessedUiCommandId(id))
+      return;
+
+   if(g_processed_cmd_count < MAX_UI_PROCESSED_IDS)
+     {
+      g_processed_cmd_ids[g_processed_cmd_count] = id;
+      g_processed_cmd_count++;
+      return;
+     }
+
+   for(int i = 1; i < MAX_UI_PROCESSED_IDS; i++)
+      g_processed_cmd_ids[i - 1] = g_processed_cmd_ids[i];
+   g_processed_cmd_ids[MAX_UI_PROCESSED_IDS - 1] = id;
+  }
+
+int VolumeDigits(double step)
+  {
+   int digits = 0;
+   double x = step;
+   while(digits < 8 && MathRound(x) != x)
+     {
+      x *= 10.0;
+      digits++;
+     }
+   return digits;
+  }
+
+bool NormalizeCommandLot(double requested, double &normalized, string &reason)
+  {
+   normalized = 0.0;
+   reason = "";
+   if(requested <= 0.0)
+     {
+      reason = "lot <= 0";
+      return false;
+     }
+
+   double min_lot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+   double max_lot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
+   double step = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+   if(step <= 0.0)
+      step = 0.01;
+
+   double clamped = requested;
+   if(clamped < min_lot) clamped = min_lot;
+   if(clamped > max_lot) clamped = max_lot;
+
+   double steps = MathRound((clamped - min_lot) / step);
+   normalized = min_lot + steps * step;
+   if(normalized < min_lot) normalized = min_lot;
+   if(normalized > max_lot) normalized = max_lot;
+   normalized = NormalizeDouble(normalized, VolumeDigits(step));
+
+   return (normalized > 0.0);
+  }
+
+void PushUiActionResult(const string &id,
+                        const string &action,
+                        const string &symbol,
+                        double lot,
+                        long ticket,
+                        bool success,
+                        const string &message)
+  {
+   UiActionExec ev;
+   ev.id = id;
+   ev.action = action;
+   ev.symbol = symbol;
+   ev.lot = lot;
+   ev.ticket = ticket;
+   ev.success = success;
+   ev.message = message;
+   ev.t = TimeCurrent();
+
+   if(g_ui_action_count < MAX_UI_ACTION_LOG)
+     {
+      g_ui_actions[g_ui_action_count] = ev;
+      g_ui_action_count++;
+      return;
+     }
+
+   for(int i = 1; i < MAX_UI_ACTION_LOG; i++)
+      g_ui_actions[i - 1] = g_ui_actions[i];
+   g_ui_actions[MAX_UI_ACTION_LOG - 1] = ev;
+  }
+
+bool ExecuteUiCommand(const string &id,
+                      const string &action,
+                      const string &symbol,
+                      double lot,
+                      long ticket,
+                      string &result_msg)
+  {
+   result_msg = "";
+   if(symbol != _Symbol)
+     {
+      result_msg = "symbol mismatch";
+      return false;
+     }
+
+   if(InpDryRun)
+     {
+      result_msg = "dry run enabled";
+      return true;
+     }
+
+   if(action == "buy" || action == "sell")
+     {
+      double norm_lot = 0.0;
+      string reason = "";
+      if(!NormalizeCommandLot(lot, norm_lot, reason))
+        {
+         result_msg = "invalid lot: " + reason;
+         return false;
+        }
+
+      string comment = "UICMD:" + id;
+      bool ok = (action == "buy")
+                ? g_trade.Buy(norm_lot, symbol, 0.0, 0.0, 0.0, comment)
+                : g_trade.Sell(norm_lot, symbol, 0.0, 0.0, 0.0, comment);
+      result_msg = ok ? "executed" : ("trade send failed err=" + IntegerToString(GetLastError()));
+      return ok;
+     }
+
+   if(action == "close_all")
+     {
+      int closed = 0;
+      for(int i = PositionsTotal() - 1; i >= 0; i--)
+        {
+         ulong t = PositionGetTicket(i);
+         if(!PositionSelectByTicket(t))
+            continue;
+         if(PositionGetString(POSITION_SYMBOL) != symbol)
+            continue;
+         if((int)PositionGetInteger(POSITION_MAGIC) != InpMagic)
+            continue;
+         if(g_trade.PositionClose(t))
+            closed++;
+        }
+      result_msg = "closed=" + IntegerToString(closed);
+      return true;
+     }
+
+   if(action == "close_ticket")
+     {
+      if(ticket <= 0)
+        {
+         result_msg = "ticket missing";
+         return false;
+        }
+      if(!PositionSelectByTicket((ulong)ticket))
+        {
+         result_msg = "ticket not found";
+         return false;
+        }
+      if(PositionGetString(POSITION_SYMBOL) != symbol || (int)PositionGetInteger(POSITION_MAGIC) != InpMagic)
+        {
+         result_msg = "ticket not allowed";
+         return false;
+        }
+      bool ok = g_trade.PositionClose((ulong)ticket);
+      result_msg = ok ? "closed" : ("close failed err=" + IntegerToString(GetLastError()));
+      return ok;
+     }
+
+   result_msg = "unsupported action";
+   return false;
+  }
+
+void PollUiCommands()
+  {
+   if(!InpEnableUiCommands)
+      return;
+
+   if(InpCommandPollMs > 0 && g_last_command_poll_ms > 0)
+     {
+      uint elapsed = GetTickCount() - g_last_command_poll_ms;
+      if(elapsed < (uint)InpCommandPollMs)
+         return;
+     }
+   g_last_command_poll_ms = GetTickCount();
+
+   int flags = FILE_READ | FILE_TXT | FILE_ANSI;
+   if(InpCommandUseCommonFolder)
+      flags |= FILE_COMMON;
+
+   int h = FileOpen(InpCommandFile, flags);
+   if(h == INVALID_HANDLE)
+      return;
+
+   int file_size = (int)FileSize(h);
+   if(g_command_file_offset < 0 || g_command_file_offset > file_size)
+      g_command_file_offset = 0;
+
+   FileSeek(h, g_command_file_offset, SEEK_SET);
+
+   int processed = 0;
+   while(!FileIsEnding(h) && processed < InpUiCommandMaxPerTick)
+     {
+      string line = FileReadString(h);
+      if(StringLen(line) <= 2)
+         continue;
+
+      string id = "";
+      string action = "";
+      string symbol = "";
+      double lot = 0.0;
+      long ticket = 0;
+      if(!JsonExtractString(line, "id", id) || !JsonExtractString(line, "action", action) || !JsonExtractString(line, "symbol", symbol))
+         continue;
+
+      JsonExtractDouble(line, "lot", lot);
+      JsonExtractLong(line, "ticket", ticket);
+
+      if(IsProcessedUiCommandId(id))
+         continue;
+
+      string result_msg = "";
+      bool ok = ExecuteUiCommand(id, action, symbol, lot, ticket, result_msg);
+      PushUiActionResult(id, action, symbol, lot, ticket, ok, result_msg);
+      MarkProcessedUiCommandId(id);
+      Print("UI command id=", id, " action=", action, " symbol=", symbol, " ok=", (ok ? "true" : "false"), " msg=", result_msg);
+      processed++;
+     }
+
+   g_command_file_offset = (long)FileTell(h);
+   FileClose(h);
+  }
+
 bool PlaceEntry(int direction, string ent, string ext, string sig)
   {
    string sid = BuildSid();
@@ -1732,18 +2235,20 @@ string BuildBarStatsJson(const BarStats &b)
   return s;
   }
 
-int EffectiveChartHistoryBars()
+int EffectiveChartHistoryBars(int tf_idx)
   {
-   if(InpChartHistoryBars < 50)
-      return 50;
-   if(InpChartHistoryBars > 2000)
-      return 2000;
-   return InpChartHistoryBars;
+   int fallback = ClampChartHistoryBars(InpChartHistoryBars);
+   if(tf_idx < 0 || tf_idx >= TF_COUNT)
+      return fallback;
+   int requested = g_chart_history_target[tf_idx];
+   if(requested <= 0)
+      requested = fallback;
+   return ClampChartHistoryBars(requested);
   }
 
 string BuildChartBarsJson(int tf_idx, int &exported)
   {
-   int want = EffectiveChartHistoryBars();
+   int want = EffectiveChartHistoryBars(tf_idx);
    MqlRates rates[];
    if(!LoadRates(g_tfs[tf_idx].tf, want, rates))
      {
@@ -1783,7 +2288,7 @@ string BuildIndicatorSeriesJsonByHandle(int handle, int tf_idx, int max_points)
    if(handle == INVALID_HANDLE)
       return "[]";
 
-   int want = EffectiveChartHistoryBars();
+   int want = EffectiveChartHistoryBars(tf_idx);
    int count = MathMin(max_points, want);
    if(count <= 0)
       return "[]";
@@ -1897,12 +2402,14 @@ string BuildLiveChartTfJson(int tf_idx)
   {
    int exported = 0;
    string bars_json = BuildChartBarsJson(tf_idx, exported);
-   int series_points = MathMax(50, exported);
+   int requested = EffectiveChartHistoryBars(tf_idx);
+   int series_points = MathMax(50, requested);
 
    string s = "{";
    s += "\"timeframe\":\"" + g_tfs[tf_idx].tf_name + "\",";
+   s += "\"historyBarsRequested\":" + IntegerToString(requested) + ",";
    s += "\"historyBarsExported\":" + IntegerToString(exported) + ",";
-   s += "\"historyBarsMax\":" + IntegerToString(EffectiveChartHistoryBars()) + ",";
+   s += "\"historyBarsMax\":" + IntegerToString(ClampChartHistoryBars(InpChartHistoryBarsMax)) + ",";
    s += "\"bars\":" + bars_json + ",";
    s += "\"indicators\":{";
    s += "\"ema13\":" + BuildIndicatorSeriesJsonByHandle(g_tfs[tf_idx].ma_handles[MA_EMA13], tf_idx, series_points) + ",";
@@ -2130,8 +2637,18 @@ string BuildStateJson()
 
       json += "{";
       json += "\"ticket\":" + IntegerToString((int)ticket) + ",";
+      json += "\"symbol\":\"" + JsonEscape(PositionGetString(POSITION_SYMBOL)) + "\",";
       json += "\"type\":" + IntegerToString((int)PositionGetInteger(POSITION_TYPE)) + ",";
+      json += "\"volume\":" + DoubleToString(PositionGetDouble(POSITION_VOLUME), 2) + ",";
+      json += "\"openTime\":" + TimeToJson((datetime)PositionGetInteger(POSITION_TIME)) + ",";
+      json += "\"openPrice\":" + DoubleToString(PositionGetDouble(POSITION_PRICE_OPEN), _Digits) + ",";
+      json += "\"currentPrice\":" + DoubleToString(PositionGetDouble(POSITION_PRICE_CURRENT), _Digits) + ",";
+      json += "\"sl\":" + DoubleToString(PositionGetDouble(POSITION_SL), _Digits) + ",";
+      json += "\"tp\":" + DoubleToString(PositionGetDouble(POSITION_TP), _Digits) + ",";
       json += "\"profit\":" + DoubleToString(PositionGetDouble(POSITION_PROFIT), 2) + ",";
+      json += "\"swap\":" + DoubleToString(PositionGetDouble(POSITION_SWAP), 2) + ",";
+      json += "\"commission\":" + DoubleToString(PositionGetDouble(POSITION_COMMISSION), 2) + ",";
+      json += "\"magic\":" + IntegerToString((int)PositionGetInteger(POSITION_MAGIC)) + ",";
       json += "\"comment\":\"" + JsonEscape(PositionGetString(POSITION_COMMENT)) + "\"";
       json += "}";
      }
@@ -2148,6 +2665,23 @@ string BuildStateJson()
       json += "\"reason\":\"" + JsonEscape(g_reassess[i].reason) + "\",";
       json += "\"previousSid\":\"" + JsonEscape(g_reassess[i].previous_sid) + "\",";
       json += "\"newSid\":\"" + JsonEscape(g_reassess[i].new_sid) + "\"";
+     json += "}";
+     }
+   json += "],";
+
+   json += "\"lastActions\":[";
+   for(int i = 0; i < g_ui_action_count; i++)
+     {
+      if(i > 0) json += ",";
+      json += "{";
+      json += "\"id\":\"" + JsonEscape(g_ui_actions[i].id) + "\",";
+      json += "\"action\":\"" + JsonEscape(g_ui_actions[i].action) + "\",";
+      json += "\"symbol\":\"" + JsonEscape(g_ui_actions[i].symbol) + "\",";
+      json += "\"lot\":" + DoubleToString(g_ui_actions[i].lot, 2) + ",";
+      json += "\"ticket\":" + IntegerToString((int)g_ui_actions[i].ticket) + ",";
+      json += "\"success\":" + BoolJson(g_ui_actions[i].success) + ",";
+      json += "\"message\":\"" + JsonEscape(g_ui_actions[i].message) + "\",";
+      json += "\"time\":" + TimeToJson(g_ui_actions[i].t);
       json += "}";
      }
    json += "]";
@@ -2329,8 +2863,10 @@ int OnInit()
         }
 
       g_tfs[i].startup_backfill_ready = BootstrapCrossEventsFromHistory(i);
+      g_chart_history_target[i] = ClampChartHistoryBars(InpChartHistoryBars);
      }
 
+   RefreshChartHistoryRequest();
    return INIT_SUCCEEDED;
   }
 
@@ -2355,6 +2891,9 @@ void OnDeinit(const int reason)
 
 void OnTick()
   {
+   RefreshChartHistoryRequest();
+   PollUiCommands();
+
    bool changed = false;
    for(int i = 0; i < TF_COUNT; i++)
      {

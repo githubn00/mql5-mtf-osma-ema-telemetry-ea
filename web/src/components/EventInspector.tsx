@@ -20,7 +20,11 @@ export function EventInspector({ event, actions }: Props) {
         {actions.length === 0 && <div className="muted">No actions yet.</div>}
         {actions.map((a) => (
           <div key={a.id} className="action-item">
-            <strong>{a.action.toUpperCase()}</strong> {a.symbol} <span className="muted">{a.acceptedAt}</span>
+            <strong>{a.action.toUpperCase()}</strong> {a.symbol}
+            {typeof a.lot === "number" ? ` lot=${a.lot}` : ""}
+            {typeof a.ticket === "number" ? ` ticket=${a.ticket}` : ""}
+            {" "}
+            <span className="muted">{a.acceptedAt}</span>
           </div>
         ))}
       </div>

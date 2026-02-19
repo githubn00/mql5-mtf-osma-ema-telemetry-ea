@@ -2,6 +2,7 @@
 import "./App.css";
 import { ChartPanel } from "./components/ChartPanel";
 import { EventInspector } from "./components/EventInspector";
+import { PositionsPanel } from "./components/PositionsPanel";
 import { SignalPanel } from "./components/SignalPanel";
 import { TelemetryTable } from "./components/TelemetryTable";
 import { TradePanel } from "./components/TradePanel";
@@ -58,9 +59,17 @@ function App() {
     document.body.classList.toggle("dark-page", darkMode);
     return () => document.body.classList.remove("dark-page");
   }, [darkMode]);
-  const onAction = async (action: "buy" | "sell" | "close_all") => {
-    await submit(action, symbol);
+  const onAction = async (action: "buy" | "sell" | "close_all", options?: { lot?: number }) => {
+    await submit(action, symbol, options);
     setToast(`Action ${action.toUpperCase()} accepted`);
+    window.setTimeout(() => setToast(""), 1800);
+  };
+
+  const onCloseTicket = async (ticket: number) => {
+    const ok = window.confirm(`Close ticket ${ticket} on ${symbol}?`);
+    if (!ok) return;
+    await submit("close_ticket", symbol, { ticket });
+    setToast(`Close ticket ${ticket} accepted`);
     window.setTimeout(() => setToast(""), 1800);
   };
 
@@ -107,6 +116,12 @@ function App() {
       <SignalPanel state={state} />
       <TelemetryTable state={state} />
       <TradePanel symbol={symbol} busy={busy} onAction={onAction} />
+      <PositionsPanel
+        symbol={symbol}
+        positions={state.positions?.open ?? []}
+        busy={busy}
+        onCloseTicket={onCloseTicket}
+      />
       <EventInspector event={selectedEvent} actions={actions} />
     </main>
   );

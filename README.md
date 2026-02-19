@@ -142,6 +142,9 @@ python dashboard_server.py
 ```
 
 It listens on `http://127.0.0.1:8765` and serves `web/dist` if present (fallbacks to a legacy HTML message if not).
+It also writes executable UI commands to:
+
+- `Terminal\\Common\\Files\\ea_multitf_commands.jsonl`
 
 Open this in a browser:
 
@@ -157,6 +160,12 @@ Auto-detect mode is also supported (recommended first):
 
 ```bash
 python dashboard_server.py --prefer-file
+```
+
+You can override command queue path if needed:
+
+```bash
+python dashboard_server.py --command-file "C:\\Users\\<you>\\AppData\\Roaming\\MetaQuotes\\Terminal\\Common\\Files\\ea_multitf_commands.jsonl"
 ```
 
 In auto-detect mode, the server scans:
@@ -182,6 +191,12 @@ Set:
 - `InpJsonUseCommonFolder = true` (recommended so tester/live write to same shared file)
 - `InpChartHistoryBars = 500` (default chart history exported per timeframe)
 - optional: `InpTelemetryTimeoutMs`, `InpTelemetryMinIntervalMs`
+- UI command execution inputs:
+  - `InpEnableUiCommands = true`
+  - `InpCommandFile = "ea_multitf_commands.jsonl"`
+  - `InpCommandUseCommonFolder = true`
+  - `InpCommandPollMs = 500`
+  - `InpUiCommandMaxPerTick = 5`
 
 ### 3. MT5 terminal setting required
 
@@ -200,15 +215,19 @@ Notes:
 - Debug source selection via `http://127.0.0.1:8765/api/state` fields:
 - `_source`, `_selectedFile`, `_stateUpdatedAt`, `_fileUpdatedAt`, `_httpUpdatedAt`, `_fileMtime`.
 
-### Trade action API (signal-only)
+### Trade action API (executable via EA command queue)
 
-UI trade buttons call backend action endpoints (no broker execution from web app):
+UI trade buttons call backend action endpoints. Backend both logs and queues commands for EA execution.
 
 - `POST /api/actions` with payload:
-  - `{"action":"buy|sell|close_all","symbol":"BTCUSD#","source":"web_ui","ts":1730000000000,"meta":{}}`
+  - `{"action":"buy","symbol":"BTCUSD#","lot":0.10,"source":"web_ui","ts":1730000000000,"meta":{}}`
+  - `{"action":"sell","symbol":"BTCUSD#","lot":0.10,"source":"web_ui","ts":1730000000000,"meta":{}}`
+  - `{"action":"close_all","symbol":"BTCUSD#","source":"web_ui","ts":1730000000000,"meta":{}}`
+  - `{"action":"close_ticket","symbol":"BTCUSD#","ticket":123456,"source":"web_ui","ts":1730000000000,"meta":{}}`
 - `GET /api/actions?limit=50` returns recent action log entries.
 
 Actions are persisted to `action_log.jsonl`.
+Executable commands are appended to `ea_multitf_commands.jsonl` for EA polling.
 
 ## JSON Structure (`InpJsonFile`)
 
@@ -243,7 +262,11 @@ Top-level keys:
   - `current_bar` (OHLC + color/height + `pctVsPrevBar`)
 4. `positions`
 - `open[]` (filtered by current symbol and `InpMagic`)
+- now includes MT5-like fields:
+  - `ticket`, `symbol`, `type`, `volume`, `openTime`, `openPrice`
+  - `currentPrice`, `sl`, `tp`, `profit`, `swap`, `commission`, `magic`, `comment`
 - `reassessments[]`
+- `lastActions[]` (recent UI command execution results from EA)
 
 Compact example:
 

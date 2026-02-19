@@ -33,6 +33,7 @@ export interface ChartEvent {
 
 export interface ChartTfData {
   timeframe: TfName;
+  historyBarsRequested?: number;
   historyBarsExported: number;
   historyBarsMax: number;
   bars: ChartBar[];
@@ -80,19 +81,59 @@ export interface TelemetryState {
       strong?: { osmaBuy?: boolean; osmaSell?: boolean; emaBuy?: boolean; emaSell?: boolean };
     };
   };
+  positions?: {
+    open?: PositionRecord[];
+    reassessments?: Array<Record<string, unknown>>;
+    lastActions?: UiExecutionRecord[];
+  };
   _source?: string;
   _selectedFile?: string;
   _stateUpdatedAt?: number;
   _fileUpdatedAt?: number;
   _httpUpdatedAt?: number;
+  _chartRequest?: {
+    updatedAt?: number;
+    globalBars?: number;
+    perTfBars?: Partial<Record<TfName, number>>;
+  };
 }
 
 export interface ActionRecord {
   id: string;
-  action: "buy" | "sell" | "close_all";
+  action: "buy" | "sell" | "close_all" | "close_ticket";
   symbol: string;
   source: string;
   ts: number;
   acceptedAt: string;
+  lot?: number | null;
+  ticket?: number | null;
   meta?: Record<string, unknown>;
+}
+
+export interface UiExecutionRecord {
+  id: string;
+  action: "buy" | "sell" | "close_all" | "close_ticket";
+  symbol: string;
+  lot?: number;
+  ticket?: number;
+  success: boolean;
+  message?: string;
+  time: number;
+}
+
+export interface PositionRecord {
+  ticket: number;
+  symbol: string;
+  type: number;
+  volume: number;
+  openTime: number;
+  openPrice: number;
+  currentPrice: number;
+  sl: number;
+  tp: number;
+  profit: number;
+  swap: number;
+  commission: number;
+  magic: number;
+  comment: string;
 }

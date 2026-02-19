@@ -20,11 +20,15 @@ export function useActions() {
     refresh();
   }, []);
 
-  const submit = async (action: "buy" | "sell" | "close_all", symbol: string) => {
+  const submit = async (
+    action: "buy" | "sell" | "close_all" | "close_ticket",
+    symbol: string,
+    options?: { lot?: number; ticket?: number }
+  ) => {
     setBusy(true);
     setError("");
     try {
-      await postAction(action, symbol);
+      await postAction(action, symbol, options);
       await refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));

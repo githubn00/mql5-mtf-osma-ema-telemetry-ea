@@ -1,0 +1,19 @@
+{"id": "9dc1f6f7-0f06-417c-82af-392dfbd63cbb", "action": "buy", "symbol": "BTCUSD#", "source": "web_ui", "ts": 1771472079475, "meta": {}, "acceptedAt": "2026-02-19T03:34:39.485897+00:00"}
+{"id": "9a03f0d3-6955-45c8-952c-6d0cb944b06f", "action": "sell", "symbol": "BTCUSD#", "source": "web_ui", "ts": 1771472082759, "meta": {}, "acceptedAt": "2026-02-19T03:34:42.773124+00:00"}
+{"id": "282f602a-0f15-470c-9fad-44e8a8b8ebbd", "action": "buy", "symbol": "BTCUSD#", "source": "web_ui", "ts": 1771472096631, "meta": {}, "acceptedAt": "2026-02-19T03:34:56.650614+00:00"}
+{"id": "0e63361a-5790-4c5f-acc6-d4d0a25985cd", "action": "close_all", "symbol": "BTCUSD#", "source": "web_ui", "ts": 1771472101607, "meta": {}, "acceptedAt": "2026-02-19T03:35:01.625211+00:00"}
+{"id": "84bfc7f7-e823-4544-9f01-945f2e54a6a4", "action": "close_all", "symbol": "BTCUSD#", "source": "web_ui", "ts": 1771472878096, "meta": {}, "acceptedAt": "2026-02-19T03:47:58.113359+00:00"}
+{"id": "fe4dde44-fd37-462a-b1d1-e7d9e38f9adb", "action": "sell", "symbol": "BTCUSD#", "source": "web_ui", "ts": 1771473819876, "meta": {}, "acceptedAt": "2026-02-19T04:03:39.902223+00:00"}
+{"id": "39c326a0-b0b2-40e4-b4dd-b826e441d5b8", "action": "sell", "symbol": "BTCUSD#", "source": "web_ui", "ts": 1771473982066, "meta": {}, "acceptedAt": "2026-02-19T04:06:22.084737+00:00"}
+{"id": "04a9cd4a-6fe4-4d0e-bafb-50cfb910d93b", "action": "sell", "symbol": "BTCUSD#", "source": "web_ui", "ts": 1771473987178, "meta": {}, "acceptedAt": "2026-02-19T04:06:27.193609+00:00"}
+{"id": "96c37b16-e784-40e4-83d5-067faf86fd91", "action": "buy", "symbol": "BTCUSD#", "source": "web_ui", "ts": 1771473995241, "meta": {}, "acceptedAt": "2026-02-19T04:06:35.256837+00:00"}
+{"id": "32e2f09b-e935-47a2-a8bb-15ec17fa9e75", "action": "buy", "symbol": "BTCUSD#", "source": "web_ui", "ts": 1771474003520, "meta": {}, "acceptedAt": "2026-02-19T04:06:43.531177+00:00"}
+{"id": "45ec3352-c8be-42fd-8d7f-d842151b7754", "action": "sell", "symbol": "BTCUSD#", "source": "web_ui", "ts": 1771474090401, "meta": {}, "acceptedAt": "2026-02-19T04:08:10.409451+00:00"}
+{"id": "cd1e3260-8d31-415f-87c4-2396c71aac53", "action": "sell", "symbol": "BTCUSD#", "source": "web_ui", "ts": 1771474106564, "meta": {}, "acceptedAt": "2026-02-19T04:08:26.592364+00:00"}
+{"id": "eba8967f-c499-4126-b270-68cc5902e9fd", "action": "buy", "symbol": "BTCUSD#", "source": "diag", "ts": 1771475000000, "lot": 0.01, "ticket": null, "meta": {}, "acceptedAt": "2026-02-19T04:10:10.165685+00:00"}
+{"id": "aba5205c-8282-41c3-b15e-f93cb44a4f4b", "action": "buy", "symbol": "BTCUSD#", "source": "web_ui", "ts": 1771474241685, "lot": 0.01, "ticket": null, "meta": {}, "acceptedAt": "2026-02-19T04:10:41.700214+00:00"}
+{"id": "e55d54cc-1d25-44d2-8fd9-4114167956ce", "action": "sell", "symbol": "BTCUSD#", "source": "diag", "ts": 1771475100000, "lot": 0.01, "ticket": null, "meta": {}, "acceptedAt": "2026-02-19T04:10:52.452111+00:00"}
+{"id": "80eeba1b-8a37-40ca-ab71-9654c047a5dd", "action": "sell", "symbol": "BTCUSD#", "source": "reg", "ts": 0, "lot": 0.01, "ticket": null, "meta": {}, "acceptedAt": "2026-02-19T04:14:25.711513+00:00"}
+{"id": "c674efe4-26a8-47c6-a0c7-3396cb4bb112", "action": "close_ticket", "symbol": "BTCUSD#", "source": "reg", "ts": 0, "lot": null, "ticket": 123, "meta": {}, "acceptedAt": "2026-02-19T04:14:25.794051+00:00"}
+{"id": "024cfb08-94a7-4413-99fe-86e81b918135", "action": "close_ticket", "symbol": "BTCUSD#", "source": "web_ui", "ts": 1771474655958, "lot": null, "ticket": 675675488, "meta": {}, "acceptedAt": "2026-02-19T04:17:35.965393+00:00"}
+{"id": "c788e269-adc9-4f94-9a9a-fc1219f58e6b", "action": "close_ticket", "symbol": "BTCUSD#", "source": "web_ui", "ts": 1771474717624, "lot": null, "ticket": 675677287, "meta": {}, "acceptedAt": "2026-02-19T04:18:37.661869+00:00"}
