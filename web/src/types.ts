@@ -33,6 +33,7 @@ export interface ChartEvent {
 
 export interface ChartTfData {
   timeframe: TfName;
+  historyBarsRequested?: number;
   historyBarsExported: number;
   historyBarsMax: number;
   bars: ChartBar[];
@@ -69,6 +70,12 @@ export interface TelemetryState {
   live?: {
     per_tf_state?: Record<string, TfLiveState>;
     chart?: Record<string, ChartTfData>;
+    chartRequest?: {
+      updatedAt?: number;
+      globalMinBars?: number;
+      globalMaxBars?: number;
+      perTfBars?: Partial<Record<TfName, number>>;
+    };
     quote?: {
       bid?: number;
       ask?: number;
@@ -85,6 +92,11 @@ export interface TelemetryState {
   _stateUpdatedAt?: number;
   _fileUpdatedAt?: number;
   _httpUpdatedAt?: number;
+  _chartRequest?: {
+    updatedAt?: number;
+    globalBars?: number;
+    perTfBars?: Partial<Record<TfName, number>>;
+  };
 }
 
 export interface ActionRecord {

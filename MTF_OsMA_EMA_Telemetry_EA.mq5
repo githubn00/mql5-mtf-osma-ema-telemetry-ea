@@ -6,9 +6,10 @@
 
 #define TF_COUNT 6
 #define MA_COUNT 6
-#define MAX_CROSS_EVENTS 80
-#define MAX_OSMA_EVENTS 80
+#define MAX_CROSS_EVENTS 2000
+#define MAX_OSMA_EVENTS 2000
 #define MAX_REASSESS_EVENTS 120
+#define CHART_HISTORY_MIN_BARS 50
 
 enum TrendDirection
   {
@@ -188,7 +189,11 @@ input double InpNearCrossThresholdPoints = 80.0;
 input int InpConvergenceBars = 3;
 input int InpProjectionHorizonBars = 1;
 input string InpJsonFile = "ea_multitf_state.json";
-input int InpChartHistoryBars = 500;
+input int InpChartHistoryBars = 120;
+input int InpChartHistoryBarsMax = 10000;
+input string InpChartRequestFile = "ea_multitf_chart_request.json";
+input bool InpChartRequestUseCommonFolder = true;
+input int InpChartRequestPollMs = 750;
 input bool InpJsonUseCommonFolder = true;
 input bool InpEnableHttpTelemetry = false;
 input string InpTelemetryUrl = "http://127.0.0.1:8765/api/telemetry";
@@ -217,6 +222,9 @@ string g_last_recommendation = "NONE";
 int g_sid_counter = 0;
 double g_last_scalp_win = 0.0;
 uint g_last_http_send_ms = 0;
+uint g_last_chart_request_poll_ms = 0;
+int g_chart_history_target[TF_COUNT];
+int g_chart_history_last_request_updated_at = 0;
 
 const ENUM_TIMEFRAMES TF_VALUES[TF_COUNT] = {PERIOD_M1, PERIOD_M5, PERIOD_M15, PERIOD_H1, PERIOD_H4, PERIOD_D1};
 const string TF_NAMES[TF_COUNT] = {"M1", "M5", "M15", "H1", "H4", "D1"};
@@ -270,6 +278,240 @@ int SignOf(double v)
    if(v > 0.0) return 1;
    if(v < 0.0) return -1;
    return 0;
+  }
+
+bool IsJsonWhitespaceChar(int ch)
+  {
+   return (ch == 9 || ch == 10 || ch == 13 || ch == 32);
+  }
+
+bool IsDigitChar(int ch)
+  {
+   return (ch >= 48 && ch <= 57);
+  }
+
+int ClampChartHistoryBars(int bars)
+  {
+   int max_bars = InpChartHistoryBarsMax;
+   if(max_bars < CHART_HISTORY_MIN_BARS)
+      max_bars = CHART_HISTORY_MIN_BARS;
+   if(max_bars > 20000)
+      max_bars = 20000;
+   if(bars < CHART_HISTORY_MIN_BARS)
+      return CHART_HISTORY_MIN_BARS;
+   if(bars > max_bars)
+      return max_bars;
+   return bars;
+  }
+
+bool TryReadTextFile(const string &file_name, bool use_common, string &out)
+  {
+   out = "";
+   int flags = FILE_READ | FILE_TXT | FILE_ANSI;
+   if(use_common)
+      flags |= FILE_COMMON;
+
+   int h = FileOpen(file_name, flags);
+   if(h == INVALID_HANDLE)
+      return false;
+
+   while(!FileIsEnding(h))
+      out += FileReadString(h);
+
+   FileClose(h);
+   return StringLen(out) > 0;
+  }
+
+bool TryReadChartRequestText(string &out)
+  {
+   // Prefer configured location, then fallback to the opposite sandbox.
+   if(TryReadTextFile(InpChartRequestFile, InpChartRequestUseCommonFolder, out))
+      return true;
+   if(TryReadTextFile(InpChartRequestFile, !InpChartRequestUseCommonFolder, out))
+      return true;
+   return false;
+  }
+
+int JsonExtractIntAfterColon(const string &json, int colon_pos, int fallback)
+  {
+   int n = StringLen(json);
+   if(colon_pos < 0 || colon_pos >= n)
+      return fallback;
+
+   int i = colon_pos + 1;
+   while(i < n)
+     {
+      int ch = StringGetCharacter(json, i);
+      if(!IsJsonWhitespaceChar(ch))
+         break;
+      i++;
+     }
+   if(i >= n)
+      return fallback;
+
+   int start = i;
+   int ch0 = StringGetCharacter(json, i);
+   if(ch0 == 45)
+      i++;
+
+   int digit_start = i;
+   while(i < n && IsDigitChar(StringGetCharacter(json, i)))
+      i++;
+
+   if(i <= digit_start)
+      return fallback;
+
+   string num = StringSubstr(json, start, i - start);
+   return (int)StringToInteger(num);
+  }
+
+int JsonExtractInt(const string &json, const string &key, int fallback)
+  {
+   string probe = "\"" + key + "\"";
+   int kp = StringFind(json, probe, 0);
+   if(kp < 0)
+      return fallback;
+   int cp = StringFind(json, ":", kp + StringLen(probe));
+   if(cp < 0)
+      return fallback;
+   return JsonExtractIntAfterColon(json, cp, fallback);
+  }
+
+string JsonExtractObject(const string &json, const string &key)
+  {
+   string probe = "\"" + key + "\"";
+   int kp = StringFind(json, probe, 0);
+   if(kp < 0)
+      return "";
+
+   int cp = StringFind(json, ":", kp + StringLen(probe));
+   if(cp < 0)
+      return "";
+
+   int n = StringLen(json);
+   int i = cp + 1;
+   while(i < n)
+     {
+      int ch = StringGetCharacter(json, i);
+      if(!IsJsonWhitespaceChar(ch))
+         break;
+      i++;
+     }
+
+   if(i >= n || StringGetCharacter(json, i) != 123) // {
+      return "";
+
+   int start = i;
+   int depth = 0;
+   bool in_string = false;
+   bool escape = false;
+
+   for(; i < n; i++)
+     {
+      int ch = StringGetCharacter(json, i);
+      if(in_string)
+        {
+         if(escape)
+           {
+            escape = false;
+            continue;
+           }
+         if(ch == 92) // \
+           {
+            escape = true;
+            continue;
+           }
+         if(ch == 34) // "
+            in_string = false;
+         continue;
+        }
+
+      if(ch == 34)
+        {
+         in_string = true;
+         continue;
+        }
+
+      if(ch == 123) // {
+         depth++;
+      else if(ch == 125) // }
+        {
+         depth--;
+         if(depth == 0)
+            return StringSubstr(json, start, i - start + 1);
+        }
+     }
+
+   return "";
+  }
+
+void RefreshChartHistoryRequest()
+  {
+   if(InpChartRequestPollMs > 0 && g_last_chart_request_poll_ms > 0)
+     {
+      uint elapsed = GetTickCount() - g_last_chart_request_poll_ms;
+      if(elapsed < (uint)InpChartRequestPollMs)
+         return;
+     }
+   g_last_chart_request_poll_ms = GetTickCount();
+
+   string raw = "";
+   if(!TryReadChartRequestText(raw))
+      return;
+
+   int fallback = ClampChartHistoryBars(InpChartHistoryBars);
+   int global_req = ClampChartHistoryBars(JsonExtractInt(raw, "globalBars", fallback));
+   int req_updated_at = JsonExtractInt(raw, "updatedAt", g_chart_history_last_request_updated_at);
+   string per_tf = JsonExtractObject(raw, "perTfBars");
+
+   for(int i = 0; i < TF_COUNT; i++)
+     {
+      int tf_req = global_req;
+      if(StringLen(per_tf) > 0)
+         tf_req = ClampChartHistoryBars(JsonExtractInt(per_tf, g_tfs[i].tf_name, tf_req));
+      g_chart_history_target[i] = tf_req;
+     }
+
+   g_chart_history_last_request_updated_at = req_updated_at;
+  }
+
+int EffectiveChartHistoryBars(int tf_idx)
+  {
+   int base = ClampChartHistoryBars(InpChartHistoryBars);
+   if(tf_idx < 0 || tf_idx >= TF_COUNT)
+      return base;
+   int requested = g_chart_history_target[tf_idx];
+   if(requested <= 0)
+      requested = base;
+   return ClampChartHistoryBars(requested);
+  }
+
+int LoadRatesAtMost(ENUM_TIMEFRAMES tf, int count, MqlRates &rates[])
+  {
+   if(count <= 0)
+      return 0;
+   ArrayResize(rates, count);
+   int copied = CopyRates(_Symbol, tf, 0, count, rates);
+   if(copied <= 0)
+      return 0;
+   ArrayResize(rates, copied);
+   ArraySetAsSeries(rates, true);
+   return copied;
+  }
+
+int LoadBufferAtMost(int handle, int count, double &dst[])
+  {
+   if(handle == INVALID_HANDLE || count <= 0)
+      return 0;
+   ArrayResize(dst, count);
+   ArrayInitialize(dst, 0.0);
+   ArraySetAsSeries(dst, true);
+   int copied = CopyBuffer(handle, 0, 0, count, dst);
+   if(copied <= 0)
+      return 0;
+   ArrayResize(dst, copied);
+   ArraySetAsSeries(dst, true);
+   return copied;
   }
 
 bool LoadBuffer(int handle, int count, double &dst[])
@@ -1732,33 +1974,16 @@ string BuildBarStatsJson(const BarStats &b)
   return s;
   }
 
-int EffectiveChartHistoryBars()
+string BuildChartBarsJson(int tf_idx, int want, int &exported, datetime &oldest_time)
   {
-   if(InpChartHistoryBars < 50)
-      return 50;
-   if(InpChartHistoryBars > 2000)
-      return 2000;
-   return InpChartHistoryBars;
-  }
-
-string BuildChartBarsJson(int tf_idx, int &exported)
-  {
-   int want = EffectiveChartHistoryBars();
    MqlRates rates[];
-   if(!LoadRates(g_tfs[tf_idx].tf, want, rates))
-     {
-      exported = 0;
-      return "[]";
-     }
-
-   int got = ArraySize(rates);
-   if(got <= 0)
-     {
-      exported = 0;
-      return "[]";
-     }
-
+   int got = LoadRatesAtMost(g_tfs[tf_idx].tf, want, rates);
    exported = got;
+   oldest_time = 0;
+   if(got <= 0)
+      return "[]";
+
+   oldest_time = rates[got - 1].time;
    string s = "[";
    bool first = true;
    for(int i = got - 1; i >= 0; i--)
@@ -1778,25 +2003,19 @@ string BuildChartBarsJson(int tf_idx, int &exported)
    return s;
   }
 
-string BuildIndicatorSeriesJsonByHandle(int handle, int tf_idx, int max_points)
+string BuildIndicatorSeriesJsonByHandle(int handle, int tf_idx, int count_want)
   {
-   if(handle == INVALID_HANDLE)
-      return "[]";
-
-   int want = EffectiveChartHistoryBars();
-   int count = MathMin(max_points, want);
-   if(count <= 0)
+   if(handle == INVALID_HANDLE || count_want <= 0)
       return "[]";
 
    MqlRates rates[];
-   if(!LoadRates(g_tfs[tf_idx].tf, count, rates))
+   int got_rates = LoadRatesAtMost(g_tfs[tf_idx].tf, count_want, rates);
+   if(got_rates <= 0)
       return "[]";
 
    double vals[];
-   if(!LoadBuffer(handle, count, vals))
-      return "[]";
-
-   int got = MathMin(ArraySize(rates), ArraySize(vals));
+   int got_vals = LoadBufferAtMost(handle, count_want, vals);
+   int got = MathMin(got_rates, got_vals);
    if(got <= 0)
       return "[]";
 
@@ -1815,36 +2034,54 @@ string BuildIndicatorSeriesJsonByHandle(int handle, int tf_idx, int max_points)
    return s;
   }
 
-string BuildChartEventsJson(int tf_idx)
+bool EventInChartRange(datetime t, datetime oldest_time)
+  {
+   if(t <= 0)
+      return false;
+   if(oldest_time <= 0)
+      return true;
+   return t >= oldest_time;
+  }
+
+string BuildChartEventsJson(int tf_idx, datetime oldest_time)
   {
    string s = "[";
    bool first = true;
 
-   int cross_start = MathMax(0, g_tfs[tf_idx].cross_count - 40);
-   for(int i = cross_start; i < g_tfs[tf_idx].cross_count; i++)
+   for(int i = 0; i < g_tfs[tf_idx].cross_count; i++)
      {
       CrossEvent ev = g_tfs[tf_idx].cross_events[i];
-      if(!first) s += ",";
-      first = false;
-      s += "{";
-      s += "\"id\":\"cross-" + IntegerToString(i) + "-" + JsonEscape(g_tfs[tf_idx].tf_name) + "\",";
-      s += "\"time\":" + TimeToJson(ev.t) + ",";
-      s += "\"type\":\"cross\",";
-      s += "\"tf\":\"" + g_tfs[tf_idx].tf_name + "\",";
-      s += "\"pair\":\"" + JsonEscape(ev.pair) + "\",";
-      s += "\"direction\":" + IntegerToString(ev.direction) + ",";
-      s += "\"price\":" + DoubleToString(ev.price, _Digits) + ",";
-      s += "\"value\":" + DoubleToString(ev.price, _Digits) + ",";
-      s += "\"barsSincePrev\":" + IntegerToString(ev.bars_since_prev) + ",";
-      s += "\"phase\":\"" + PhaseToString(g_tfs[tf_idx].state.phase) + "\",";
-      s += "\"extremumType\":\"" + JsonEscape(ev.extremum_type) + "\",";
-      s += "\"extremumPrice\":" + DoubleToString(ev.extremum_price, _Digits) + ",";
-      s += "\"extremumBar\":" + IntegerToString(ExtremumBarShift(tf_idx, ev.extremum_t));
-      s += "}";
+      bool include_cross = EventInChartRange(ev.t, oldest_time);
+      bool include_ext = (ev.has_extremum && EventInChartRange(ev.extremum_t, oldest_time));
 
-      if(ev.has_extremum)
+      if(!include_cross && !include_ext)
+         continue;
+
+      if(include_cross)
         {
-         s += ",";
+         if(!first) s += ",";
+         first = false;
+         s += "{";
+         s += "\"id\":\"cross-" + IntegerToString(i) + "-" + JsonEscape(g_tfs[tf_idx].tf_name) + "\"," ;
+         s += "\"time\":" + TimeToJson(ev.t) + ",";
+         s += "\"type\":\"cross\",";
+         s += "\"tf\":\"" + g_tfs[tf_idx].tf_name + "\",";
+         s += "\"pair\":\"" + JsonEscape(ev.pair) + "\",";
+         s += "\"direction\":" + IntegerToString(ev.direction) + ",";
+         s += "\"price\":" + DoubleToString(ev.price, _Digits) + ",";
+         s += "\"value\":" + DoubleToString(ev.price, _Digits) + ",";
+         s += "\"barsSincePrev\":" + IntegerToString(ev.bars_since_prev) + ",";
+         s += "\"phase\":\"" + PhaseToString(g_tfs[tf_idx].state.phase) + "\",";
+         s += "\"extremumType\":\"" + JsonEscape(ev.extremum_type) + "\",";
+         s += "\"extremumPrice\":" + DoubleToString(ev.extremum_price, _Digits) + ",";
+         s += "\"extremumBar\":" + IntegerToString(ExtremumBarShift(tf_idx, ev.extremum_t));
+         s += "}";
+        }
+
+      if(include_ext)
+        {
+         if(!first) s += ",";
+         first = false;
          s += "{";
          s += "\"id\":\"extremum-" + IntegerToString(i) + "-" + JsonEscape(g_tfs[tf_idx].tf_name) + "\",";
          s += "\"time\":" + TimeToJson(ev.extremum_t) + ",";
@@ -1863,11 +2100,12 @@ string BuildChartEventsJson(int tf_idx)
         }
      }
 
-   int osma_start = MathMax(0, g_tfs[tf_idx].osma_count - 40);
-   for(int i = osma_start; i < g_tfs[tf_idx].osma_count; i++)
+   for(int i = 0; i < g_tfs[tf_idx].osma_count; i++)
      {
       OsmaEvent ev = g_tfs[tf_idx].osma_events[i];
       if(ev.event_type != "zero_cross")
+         continue;
+      if(!EventInChartRange(ev.t, oldest_time))
          continue;
 
       if(!first) s += ",";
@@ -1889,20 +2127,48 @@ string BuildChartEventsJson(int tf_idx)
       s += "}";
      }
 
+   bool tf_signal_buy = (g_tfs[tf_idx].state.osma_just_cross_up || g_tfs[tf_idx].state.osma_about_cross_up
+                         || g_tfs[tf_idx].state.ema1334_just_cross_up || g_tfs[tf_idx].state.ema1334_about_cross_up);
+   bool tf_signal_sell = (g_tfs[tf_idx].state.osma_just_cross_down || g_tfs[tf_idx].state.osma_about_cross_down
+                          || g_tfs[tf_idx].state.ema1334_just_cross_down || g_tfs[tf_idx].state.ema1334_about_cross_down);
+   if((tf_signal_buy || tf_signal_sell) && EventInChartRange(g_tfs[tf_idx].last_bar_time, oldest_time))
+     {
+      if(!first) s += ",";
+      first = false;
+      s += "{";
+      s += "\"id\":\"signal-" + JsonEscape(g_tfs[tf_idx].tf_name) + "-" + TimeToJson(g_tfs[tf_idx].last_bar_time) + "\",";
+      s += "\"time\":" + TimeToJson(g_tfs[tf_idx].last_bar_time) + ",";
+      s += "\"type\":\"signal\",";
+      s += "\"tf\":\"" + g_tfs[tf_idx].tf_name + "\",";
+      s += "\"pair\":\"TF_SIGNAL\",";
+      s += "\"direction\":" + IntegerToString(tf_signal_buy ? 1 : -1) + ",";
+      s += "\"price\":" + DoubleToString(g_tfs[tf_idx].state.bars.curr_close, _Digits) + ",";
+      s += "\"value\":" + DoubleToString(MathMax(g_tfs[tf_idx].state.ema1334_about_score, g_tfs[tf_idx].state.osma_about_score), 4) + ",";
+      s += "\"barsSincePrev\":0,";
+      s += "\"phase\":\"" + PhaseToString(g_tfs[tf_idx].state.phase) + "\",";
+      s += "\"extremumType\":\"\",";
+      s += "\"extremumPrice\":0.0,";
+      s += "\"extremumBar\":-1";
+      s += "}";
+     }
+
    s += "]";
    return s;
   }
 
 string BuildLiveChartTfJson(int tf_idx)
   {
+   int requested = EffectiveChartHistoryBars(tf_idx);
    int exported = 0;
-   string bars_json = BuildChartBarsJson(tf_idx, exported);
-   int series_points = MathMax(50, exported);
+   datetime oldest_time = 0;
+   string bars_json = BuildChartBarsJson(tf_idx, requested, exported, oldest_time);
+   int series_points = MathMax(CHART_HISTORY_MIN_BARS, requested);
 
    string s = "{";
    s += "\"timeframe\":\"" + g_tfs[tf_idx].tf_name + "\",";
+   s += "\"historyBarsRequested\":" + IntegerToString(requested) + ",";
    s += "\"historyBarsExported\":" + IntegerToString(exported) + ",";
-   s += "\"historyBarsMax\":" + IntegerToString(EffectiveChartHistoryBars()) + ",";
+   s += "\"historyBarsMax\":" + IntegerToString(ClampChartHistoryBars(InpChartHistoryBarsMax)) + ",";
    s += "\"bars\":" + bars_json + ",";
    s += "\"indicators\":{";
    s += "\"ema13\":" + BuildIndicatorSeriesJsonByHandle(g_tfs[tf_idx].ma_handles[MA_EMA13], tf_idx, series_points) + ",";
@@ -1913,7 +2179,7 @@ string BuildLiveChartTfJson(int tf_idx)
    s += "\"sma5\":" + BuildIndicatorSeriesJsonByHandle(g_tfs[tf_idx].ma_handles[MA_SMA5], tf_idx, series_points) + ",";
    s += "\"osma\":" + BuildIndicatorSeriesJsonByHandle(g_tfs[tf_idx].osma_handle, tf_idx, series_points);
    s += "},";
-   s += "\"events\":" + BuildChartEventsJson(tf_idx);
+   s += "\"events\":" + BuildChartEventsJson(tf_idx, oldest_time);
    s += "}";
 
    return s;
@@ -2108,6 +2374,19 @@ string BuildStateJson()
       if(tfi > 0) json += ",";
       json += "\"" + g_tfs[tfi].tf_name + "\":" + BuildLiveChartTfJson(tfi);
      }
+   json += "},";
+
+   json += "\"chartRequest\":{";
+   json += "\"updatedAt\":" + IntegerToString(g_chart_history_last_request_updated_at) + ",";
+   json += "\"globalMinBars\":" + IntegerToString(ClampChartHistoryBars(InpChartHistoryBars)) + ",";
+   json += "\"globalMaxBars\":" + IntegerToString(ClampChartHistoryBars(InpChartHistoryBarsMax)) + ",";
+   json += "\"perTfBars\":{";
+   for(int tfi = 0; tfi < TF_COUNT; tfi++)
+     {
+      if(tfi > 0) json += ",";
+      json += "\"" + g_tfs[tfi].tf_name + "\":" + IntegerToString(EffectiveChartHistoryBars(tfi));
+     }
+   json += "}";
    json += "}";
 
    json += "},";
@@ -2271,6 +2550,7 @@ int OnInit()
    if(InpEnableHttpTelemetry)
       Print("HTTP telemetry enabled url=", InpTelemetryUrl);
 
+   int default_chart_bars = ClampChartHistoryBars(InpChartHistoryBars);
    for(int i = 0; i < TF_COUNT; i++)
      {
       g_tfs[i].tf = TF_VALUES[i];
@@ -2291,6 +2571,7 @@ int OnInit()
       g_tfs[i].state.peak_bottom_type_1334 = "";
       g_tfs[i].state.bars.avg_height = 0.0;
       g_tfs[i].startup_backfill_ready = false;
+      g_chart_history_target[i] = default_chart_bars;
 
       for(int a = 0; a < MA_COUNT; a++)
         {
@@ -2331,6 +2612,8 @@ int OnInit()
       g_tfs[i].startup_backfill_ready = BootstrapCrossEventsFromHistory(i);
      }
 
+   RefreshChartHistoryRequest();
+
    return INIT_SUCCEEDED;
   }
 
@@ -2355,6 +2638,8 @@ void OnDeinit(const int reason)
 
 void OnTick()
   {
+   RefreshChartHistoryRequest();
+
    bool changed = false;
    for(int i = 0; i < TF_COUNT; i++)
      {

@@ -1,4 +1,4 @@
-﻿import type { ActionRecord, TelemetryState } from "../types";
+import type { ActionRecord, TelemetryState, TfName } from "../types";
 
 const API_BASE = "";
 
@@ -37,3 +37,32 @@ export async function fetchActions(limit = 50): Promise<ActionRecord[]> {
   return payload.items ?? [];
 }
 
+export async function postChartRequest(tf: TfName, bars: number) {
+  const payload = {
+    tf,
+    bars,
+    source: "web_chart_scroll",
+    ts: Date.now(),
+  };
+  const res = await fetch(`${API_BASE}/api/chart-request`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return parseJson<{ ok: boolean; request: { updatedAt: number; globalBars: number; perTfBars: Record<string, number> } }>(res);
+}
+
+export async function postChartRequestProfile(globalBars: number, perTfBars: Partial<Record<TfName, number>>) {
+  const payload = {
+    globalBars,
+    perTfBars,
+    source: "web_chart_profile",
+    ts: Date.now(),
+  };
+  const res = await fetch(`${API_BASE}/api/chart-request`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return parseJson<{ ok: boolean; request: { updatedAt: number; globalBars: number; perTfBars: Record<string, number> } }>(res);
+}

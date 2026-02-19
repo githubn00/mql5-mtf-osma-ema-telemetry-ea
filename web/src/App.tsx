@@ -6,6 +6,7 @@ import { EventInspector } from "./components/EventInspector";
 import { SignalPanel } from "./components/SignalPanel";
 import { TelemetryTable } from "./components/TelemetryTable";
 import { TradePanel } from "./components/TradePanel";
+import { postChartRequestProfile } from "./api/client";
 import { useActions } from "./hooks/useActions";
 import { useTelemetry } from "./hooks/useTelemetry";
 import type { ChartEvent, TfName } from "./types";
@@ -13,6 +14,8 @@ import type { ChartEvent, TfName } from "./types";
 const TF_LIST: TfName[] = ["M1", "M5", "M15", "H1", "H4", "D1"];
 const PREF_DARK_KEY = "telemetry_dark_mode";
 const PREF_TF_KEY = "telemetry_tf";
+const IDLE_HISTORY_BARS = 120;
+const ACTIVE_HISTORY_BARS = 600;
 
 function App() {
   const { state, error } = useTelemetry(1000);
@@ -74,6 +77,17 @@ function App() {
 
   useEffect(() => {
     window.localStorage.setItem(PREF_TF_KEY, tf);
+  }, [tf]);
+
+  useEffect(() => {
+    const perTfBars = TF_LIST.reduce((acc, name) => {
+      acc[name] = name === tf ? ACTIVE_HISTORY_BARS : IDLE_HISTORY_BARS;
+      return acc;
+    }, {} as Record<TfName, number>);
+
+    void postChartRequestProfile(IDLE_HISTORY_BARS, perTfBars).catch(() => {
+      // keep UI responsive even if request endpoint is temporarily unavailable
+    });
   }, [tf]);
 
   const onAction = async (action: "buy" | "sell" | "close_all") => {

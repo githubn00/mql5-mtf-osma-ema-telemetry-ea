@@ -1,0 +1,11 @@
+{"id": "71f475d0-83e6-431c-8d3d-e80212da4dc0", "action": "buy", "symbol": "BTCUSD#", "source": "web_ui", "ts": 1770874354964, "meta": {}, "acceptedAt": "2026-02-12T05:32:35.137977+00:00"}
+{"id": "92fbcf6c-bd92-4c0c-a54c-48332d9ba668", "action": "buy", "symbol": "BTCUSD#", "source": "web_ui", "ts": 1770874369792, "meta": {}, "acceptedAt": "2026-02-12T05:32:49.966960+00:00"}
+{"id": "3b7a4e96-852a-4284-a512-63f0bf75591d", "action": "close_all", "symbol": "BTCUSD#", "source": "web_ui", "ts": 1770875397734, "meta": {}, "acceptedAt": "2026-02-12T05:49:57.778084+00:00"}
+{"id": "86dbcf35-89b0-4716-90ae-4a9da1dee782", "action": "buy", "symbol": "BTCUSD#", "source": "web_ui", "ts": 1770876998062, "meta": {}, "acceptedAt": "2026-02-12T06:16:38.076187+00:00"}
+{"id": "4a6ced96-8ce1-48f6-bd14-09c0343f0fec", "action": "buy", "symbol": "BTCUSD#", "source": "web_ui", "ts": 1770877011902, "meta": {}, "acceptedAt": "2026-02-12T06:16:51.919594+00:00"}
+{"id": "a885cbd9-718f-427c-8d35-e9b9a51b9b96", "action": "sell", "symbol": "BTCUSD#", "source": "web_ui", "ts": 1770877222598, "meta": {}, "acceptedAt": "2026-02-12T06:20:22.605961+00:00"}
+{"id": "66854767-b829-4789-8e94-7f11e7e70b70", "action": "close_all", "symbol": "BTCUSD#", "source": "web_ui", "ts": 1770877230245, "meta": {}, "acceptedAt": "2026-02-12T06:20:30.262999+00:00"}
+{"id": "2348789b-d04b-453f-9607-8761143c8969", "action": "close_all", "symbol": "BTCUSD#", "source": "web_ui", "ts": 1770878585446, "meta": {}, "acceptedAt": "2026-02-12T06:43:05.456578+00:00"}
+{"id": "2cc2faa9-a541-4c5a-8d52-9bf9b827b6e6", "action": "close_all", "symbol": "BTCUSD#", "source": "web_ui", "ts": 1770880532470, "meta": {}, "acceptedAt": "2026-02-12T07:15:32.625021+00:00"}
+{"id": "a46b10f2-462c-4c65-84ed-633fa0cd9052", "action": "buy", "symbol": "BTCUSD#", "source": "web_ui", "ts": 1770884171482, "meta": {}, "acceptedAt": "2026-02-12T08:16:11.529086+00:00"}
+{"id": "42e739de-616b-4d31-9cd6-d27e9646a8ce", "action": "buy", "symbol": "BTCUSD#", "source": "web_ui", "ts": 1770884181094, "meta": {}, "acceptedAt": "2026-02-12T08:16:21.110316+00:00"}

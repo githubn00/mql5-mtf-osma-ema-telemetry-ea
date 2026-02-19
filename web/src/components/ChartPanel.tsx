@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { CandlestickChart, Grid3X3, Info, LocateFixed, Maximize2, Moon, RefreshCcw, ScanLine, Sun } from "lucide-react";
 import { ColorType, CrosshairMode, LineStyle, PriceScaleMode, createChart } from "lightweight-charts";
+import { postChartRequest } from "../api/client";
 import type { ChartEvent, ChartTfData, TfName } from "../types";
 
 interface Props {
@@ -57,6 +58,7 @@ const MARKER_META: Record<MarkerKey, MarkerMeta> = {
   osma_zero: { short: "ZC", name: "Zero Cross", description: "OsMA crossed zero line" },
   signal: { short: "SG", name: "Signal", description: "Strategy signal emitted" },
 };
+const LIVE_VIEW_HISTORY_CAP = 600;
 
 function toFiniteNumber(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) return value;
@@ -126,6 +128,12 @@ export function ChartPanel({ tf, data, onSelectEvent, darkMode, onToggleDarkMode
   const syncingRangeRef = useRef(false);
   const lastAppliedBarTimeRef = useRef<number>(0);
   const lastAppliedBarCountRef = useRef<number>(0);
+  const tfRef = useRef<TfName>(tf);
+  const barsExportedRef = useRef<Record<TfName, number>>({ M1: 0, M5: 0, M15: 0, H1: 0, H4: 0, D1: 0 });
+  const barsRequestedRef = useRef<Record<TfName, number>>({ M1: 0, M5: 0, M15: 0, H1: 0, H4: 0, D1: 0 });
+  const barsMaxRef = useRef<Record<TfName, number>>({ M1: 20000, M5: 20000, M15: 20000, H1: 20000, H4: 20000, D1: 20000 });
+  const requestInFlightRef = useRef(false);
+  const nextRequestAllowedAtRef = useRef(0);
 
   const [crosshair, setCrosshair] = useState<CrosshairValues | null>(null);
   const [showCrosshairPanel, setShowCrosshairPanel] = useState(true);
@@ -177,6 +185,20 @@ export function ChartPanel({ tf, data, onSelectEvent, darkMode, onToggleDarkMode
   }, [data]);
 
   useEffect(() => {
+    tfRef.current = tf;
+  }, [tf]);
+
+  useEffect(() => {
+    const exported = data?.historyBarsExported ?? 0;
+    const requested = data?.historyBarsRequested ?? exported;
+    const maxBars = data?.historyBarsMax ?? Math.max(20000, requested);
+
+    barsExportedRef.current[tf] = exported;
+    barsRequestedRef.current[tf] = requested;
+    barsMaxRef.current[tf] = Math.max(maxBars, requested);
+  }, [data, tf]);
+
+  useEffect(() => {
     window.localStorage.setItem(INDICATOR_PREF_KEY, JSON.stringify(indicatorVisible));
   }, [indicatorVisible]);
 
@@ -191,13 +213,30 @@ export function ChartPanel({ tf, data, onSelectEvent, darkMode, onToggleDarkMode
   useEffect(() => {
     if (!priceRootRef.current || !osmaRootRef.current || priceChartRef.current || osmaChartRef.current) return;
 
+    const interactiveTimeScaleOptions = {
+      rightOffset: 3,
+      timeVisible: true,
+      secondsVisible: false,
+      fixLeftEdge: false,
+      fixRightEdge: false,
+      rightBarStaysOnScroll: true,
+      lockVisibleTimeRangeOnResize: false,
+      shiftVisibleRangeOnNewBar: true,
+      allowShiftVisibleRangeOnWhitespaceReplacement: true,
+    };
+
     const baseOptions = {
       crosshair: { mode: CrosshairMode.Normal },
       rightPriceScale: { borderColor: "#2a2e39", mode: PriceScaleMode.Normal, autoScale: true },
-      timeScale: { borderColor: "#2a2e39", timeVisible: true, secondsVisible: false, rightOffset: 3 },
+      timeScale: { borderColor: "#2a2e39", ...interactiveTimeScaleOptions },
       grid: { vertLines: { color: "#2a2e39" }, horzLines: { color: "#2a2e39" } },
       handleScroll: { mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: true },
-      handleScale: { axisPressedMouseMove: true, mouseWheel: true, pinch: true },
+      handleScale: {
+        mouseWheel: true,
+        pinch: true,
+        axisPressedMouseMove: { time: true, price: true },
+        axisDoubleClickReset: { time: true, price: true },
+      },
       trackingMode: { exitMode: 1 as const },
       kineticScroll: { mouse: true, touch: true },
     };
@@ -261,6 +300,58 @@ export function ChartPanel({ tf, data, onSelectEvent, darkMode, onToggleDarkMode
       syncingRangeRef.current = true;
       osmaChartRef.current.timeScale().setVisibleLogicalRange(range);
       syncingRangeRef.current = false;
+
+      if (requestInFlightRef.current) return;
+      if (typeof range.from !== "number") return;
+      const now = Date.now();
+      if (now < nextRequestAllowedAtRef.current) return;
+
+      const tfNow = tfRef.current;
+      const exported = barsExportedRef.current[tfNow] ?? 0;
+      if (exported < 120) return;
+
+      const currentRequested = Math.max(barsRequestedRef.current[tfNow] ?? 0, exported);
+      const maxBars = Math.max(barsMaxRef.current[tfNow] ?? currentRequested, currentRequested);
+
+      if (typeof range.to === "number" && range.to > exported - 5) {
+        const liveCap = Math.min(maxBars, LIVE_VIEW_HISTORY_CAP);
+        if (currentRequested > liveCap + 100) {
+          requestInFlightRef.current = true;
+          nextRequestAllowedAtRef.current = now + 1200;
+          barsRequestedRef.current[tfNow] = liveCap;
+          void postChartRequest(tfNow, liveCap)
+            .catch(() => {
+              barsRequestedRef.current[tfNow] = currentRequested;
+            })
+            .finally(() => {
+              requestInFlightRef.current = false;
+            });
+        }
+        return;
+      }
+
+      // Do not cascade multiple growth requests before the last one is delivered.
+      if (exported + 8 < currentRequested) return;
+
+      const leftThreshold = Math.max(3, Math.floor(exported * 0.02));
+      if (range.from > leftThreshold) return;
+      if (currentRequested >= maxBars) return;
+
+      const growBy = Math.max(250, Math.floor(currentRequested * 0.5));
+      const nextBars = Math.min(maxBars, currentRequested + growBy);
+      if (nextBars <= currentRequested) return;
+
+      requestInFlightRef.current = true;
+      nextRequestAllowedAtRef.current = now + 1500;
+      barsRequestedRef.current[tfNow] = nextBars;
+
+      void postChartRequest(tfNow, nextBars)
+        .catch(() => {
+          barsRequestedRef.current[tfNow] = currentRequested;
+        })
+        .finally(() => {
+          requestInFlightRef.current = false;
+        });
     };
 
     const syncFromOsma = (range: any) => {
