@@ -1,4 +1,5 @@
 ﻿import { useEffect, useMemo, useState } from "react";
+import { Activity, CandlestickChart, Clock3, Database, DollarSign, FileText, Target } from "lucide-react";
 import "./App.css";
 import { ChartPanel } from "./components/ChartPanel";
 import { EventInspector } from "./components/EventInspector";
@@ -59,6 +60,7 @@ function App() {
     document.body.classList.toggle("dark-page", darkMode);
     return () => document.body.classList.remove("dark-page");
   }, [darkMode]);
+
   const onAction = async (action: "buy" | "sell" | "close_all", options?: { lot?: number }) => {
     await submit(action, symbol, options);
     setToast(`Action ${action.toUpperCase()} accepted`);
@@ -76,20 +78,20 @@ function App() {
   return (
     <main className={`layout ${darkMode ? "layout-dark" : ""}`}>
       <header className="panel hero">
-        <h1>MTF OsMA EMA Telemetry UI</h1>
+        <h1><CandlestickChart size={20} className="icon" /> MTF OsMA EMA Telemetry UI</h1>
         <div className="status-row">
-          <span>Symbol: {symbol}</span>
-          <span>Updated: {state.meta?.updatedAt ? new Date(state.meta.updatedAt * 1000).toLocaleString() : "-"}</span>
-          <span>Recommendation: {state.meta?.recommendation || "-"}</span>
+          <span><Target size={14} className="icon" /> Symbol: {symbol}</span>
+          <span><Clock3 size={14} className="icon" /> Updated: {state.meta?.updatedAt ? new Date(state.meta.updatedAt * 1000).toLocaleString() : "-"}</span>
+          <span><Activity size={14} className="icon" /> Recommendation: {state.meta?.recommendation || "-"}</span>
         </div>
         <div className="status-row">
-          <span className="chip">Source: {state._source || "-"}</span>
-          <span className="chip">Freshness: {freshness}</span>
-          <span className="chip">File: {state._selectedFile || "-"}</span>
-          <span className="chip">Bid: {state.live?.quote?.bid?.toFixed?.(2) ?? "-"}</span>
-          <span className="chip">Ask: {state.live?.quote?.ask?.toFixed?.(2) ?? "-"}</span>
-          <span className="chip">Spread: {state.live?.quote?.spreadPoints?.toFixed?.(1) ?? "-"} pt</span>
-          <span className="chip">{tf} close in: {countdown}</span>
+          <span className="chip"><Database size={12} className="icon" /> Source: {state._source || "-"}</span>
+          <span className="chip"><Clock3 size={12} className="icon" /> Freshness: {freshness}</span>
+          <span className="chip"><FileText size={12} className="icon" /> File: {state._selectedFile || "-"}</span>
+          <span className="chip"><DollarSign size={12} className="icon" /> Bid: {state.live?.quote?.bid?.toFixed?.(2) ?? "-"}</span>
+          <span className="chip"><DollarSign size={12} className="icon" /> Ask: {state.live?.quote?.ask?.toFixed?.(2) ?? "-"}</span>
+          <span className="chip"><DollarSign size={12} className="icon" /> Spread: {state.live?.quote?.spreadPoints?.toFixed?.(1) ?? "-"} pt</span>
+          <span className="chip"><Clock3 size={12} className="icon" /> {tf} close in: {countdown}</span>
         </div>
         {error && <div className="error">State error: {error}</div>}
         {actionError && <div className="error">Action error: {actionError}</div>}
@@ -112,6 +114,8 @@ function App() {
         ask={state.live?.quote?.ask}
         spreadPoints={state.live?.quote?.spreadPoints}
         countdown={countdown}
+        positions={state.positions?.open ?? []}
+        onCloseTicket={onCloseTicket}
       />
       <SignalPanel state={state} />
       <TelemetryTable state={state} />
@@ -128,5 +132,3 @@ function App() {
 }
 
 export default App;
-
-

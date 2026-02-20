@@ -1,3 +1,4 @@
+﻿import { X } from "lucide-react";
 import type { PositionRecord } from "../types";
 
 interface Props {
@@ -65,10 +66,12 @@ export function PositionsPanel({ symbol, positions, busy, onCloseTicket }: Props
                 <td>
                   <button
                     disabled={busy}
-                    className="close"
+                    className="icon-close-btn"
                     onClick={() => void onCloseTicket(p.ticket)}
+                    title={`Close ticket ${p.ticket}`}
+                    aria-label={`Close ticket ${p.ticket}`}
                   >
-                    Close
+                    <X size={14} />
                   </button>
                 </td>
               </tr>

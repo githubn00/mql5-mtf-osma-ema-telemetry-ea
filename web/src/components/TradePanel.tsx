@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+﻿import { useEffect, useState } from "react";
+import { CircleDollarSign, HandCoins, ShoppingCart, TrendingDown, TrendingUp } from "lucide-react";
 
 const LOT_PREF_KEY = "telemetry_manual_lot";
 
@@ -35,10 +36,10 @@ export function TradePanel({ symbol, busy, onAction }: Props) {
   return (
     <section className="panel">
       <div className="panel-head">
-        <h3>Trade Controls</h3>
+        <h3><ShoppingCart size={15} className="icon" /> Trade Controls</h3>
       </div>
       <div className="lot-row">
-        <label htmlFor="lot-input">Lot Size</label>
+        <label htmlFor="lot-input"><HandCoins size={14} className="icon" /> Lot Size</label>
         <input
           id="lot-input"
           type="number"
@@ -49,9 +50,9 @@ export function TradePanel({ symbol, busy, onAction }: Props) {
         />
       </div>
       <div className="buttons">
-        <button disabled={busy} className="buy" onClick={() => void run("buy")}>Buy</button>
-        <button disabled={busy} className="sell" onClick={() => void run("sell")}>Sell</button>
-        <button disabled={busy} className="close" onClick={() => void run("close_all")}>Close All</button>
+        <button disabled={busy} className="buy" onClick={() => void run("buy")}><TrendingUp size={14} className="icon" /> Buy</button>
+        <button disabled={busy} className="sell" onClick={() => void run("sell")}><TrendingDown size={14} className="icon" /> Sell</button>
+        <button disabled={busy} className="close" onClick={() => void run("close_all")}><CircleDollarSign size={14} className="icon" /> Close All</button>
       </div>
     </section>
   );

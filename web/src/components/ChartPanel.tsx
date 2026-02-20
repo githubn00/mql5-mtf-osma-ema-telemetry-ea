@@ -1,7 +1,8 @@
 ﻿import { useEffect, useMemo, useRef, useState } from "react";
 import { ColorType, CrosshairMode, LineStyle, createChart } from "lightweight-charts";
+import { X } from "lucide-react";
 import { postChartRequest } from "../api/client";
-import type { ChartEvent, ChartTfData, TfName } from "../types";
+import type { ChartEvent, ChartTfData, PositionRecord, TfName } from "../types";
 
 interface Props {
   tf: TfName;
@@ -13,6 +14,8 @@ interface Props {
   ask?: number;
   spreadPoints?: number;
   countdown: string;
+  positions: PositionRecord[];
+  onCloseTicket: (ticket: number) => Promise<void>;
 }
 
 type IndicatorKey = "ema13" | "ema34" | "ema150" | "ema200" | "sma2" | "sma5" | "osma";
@@ -46,7 +49,19 @@ function nearestEvent(events: ChartEvent[], time: number, price?: number) {
   return best;
 }
 
-export function ChartPanel({ tf, data, onSelectEvent, darkMode, onToggleDarkMode, bid, ask, spreadPoints, countdown }: Props) {
+export function ChartPanel({
+  tf,
+  data,
+  onSelectEvent,
+  darkMode,
+  onToggleDarkMode,
+  bid,
+  ask,
+  spreadPoints,
+  countdown,
+  positions,
+  onCloseTicket,
+}: Props) {
   const panelRef = useRef<HTMLDivElement | null>(null);
   const priceRootRef = useRef<HTMLDivElement | null>(null);
   const osmaRootRef = useRef<HTMLDivElement | null>(null);
@@ -59,6 +74,7 @@ export function ChartPanel({ tf, data, onSelectEvent, darkMode, onToggleDarkMode
 
   const bidLineRef = useRef<any>(null);
   const askLineRef = useRef<any>(null);
+  const tradeLinesRef = useRef<any[]>([]);
 
   const linesRef = useRef<Record<IndicatorKey, any>>({} as Record<IndicatorKey, any>);
   const eventsRef = useRef<ChartEvent[]>([]);
@@ -101,6 +117,8 @@ export function ChartPanel({ tf, data, onSelectEvent, darkMode, onToggleDarkMode
       })),
     [data]
   );
+
+  const visiblePositions = useMemo(() => positions ?? [], [positions]);
 
   useEffect(() => {
     tfRef.current = tf;
@@ -292,6 +310,7 @@ export function ChartPanel({ tf, data, onSelectEvent, darkMode, onToggleDarkMode
       linesRef.current = {} as Record<IndicatorKey, any>;
       bidLineRef.current = null;
       askLineRef.current = null;
+      tradeLinesRef.current = [];
     };
   }, [onSelectEvent]);
 
@@ -390,6 +409,39 @@ export function ChartPanel({ tf, data, onSelectEvent, darkMode, onToggleDarkMode
   }, [bid, ask]);
 
   useEffect(() => {
+    if (!candleRef.current) return;
+
+    for (const line of tradeLinesRef.current) {
+      try {
+        candleRef.current.removePriceLine(line);
+      } catch {
+        // ignore
+      }
+    }
+    tradeLinesRef.current = [];
+
+    const pushLine = (price: number, color: string, title: string, style = LineStyle.Solid) => {
+      if (!Number.isFinite(price) || price <= 0) return;
+      const line = candleRef.current.createPriceLine({
+        price,
+        color,
+        lineWidth: 1,
+        lineStyle: style,
+        axisLabelVisible: true,
+        title,
+      });
+      tradeLinesRef.current.push(line);
+    };
+
+    for (const p of visiblePositions) {
+      const sideColor = p.type === 0 ? "#22c55e" : "#ef4444";
+      pushLine(p.openPrice, sideColor, `P#${p.ticket}`);
+      pushLine(p.sl, "#f97316", `SL#${p.ticket}`, LineStyle.Dotted);
+      pushLine(p.tp, "#0ea5e9", `TP#${p.ticket}`, LineStyle.Dotted);
+    }
+  }, [visiblePositions]);
+
+  useEffect(() => {
     if (!priceChartRef.current || !osmaChartRef.current) return;
 
     const applyTheme = (chart: any) => {
@@ -479,8 +531,28 @@ export function ChartPanel({ tf, data, onSelectEvent, darkMode, onToggleDarkMode
         <span>OSMA: {fmt(crosshair?.values.osma, 4)}</span>
       </div>
 
+      {visiblePositions.length > 0 && (
+        <div className="position-line-controls">
+          {visiblePositions.map((p) => (
+            <div key={`line-${p.ticket}`} className="position-line-chip">
+              <span className={p.type === 0 ? "buy-text" : "sell-text"}>
+                #{p.ticket} {p.type === 0 ? "BUY" : "SELL"} {p.volume?.toFixed?.(2) ?? "-"}
+              </span>
+              <button
+                className="icon-close-btn"
+                onClick={() => void onCloseTicket(p.ticket)}
+                title={`Close ticket ${p.ticket}`}
+                aria-label={`Close ticket ${p.ticket}`}
+              ><X size={14} /></button>
+            </div>
+          ))}
+        </div>
+      )}
+
       <div ref={priceRootRef} className="chart-root" />
       <div ref={osmaRootRef} className="osma-root" />
     </section>
   );
 }
+
+
